@@ -60,7 +60,7 @@ public final class DbxJdbcPlugin {
         false,
         false,
         false,
-        StatementMaxRowsMode.APPLY_STATEMENT_MAX_ROWS
+        StatementMaxRowsMode.READ_LOOP_ONLY
     );
     private static final JdbcDriverQuirks USE_CATALOG_QUIRKS = DEFAULT_QUIRKS.withUseCatalogFallbackSql(true);
     private static final JdbcDriverQuirks KINGBASE_QUIRKS = DEFAULT_QUIRKS.withIgnoreCatalogForSchemaMetadata(true);

@@ -328,6 +328,11 @@ final class DbxJdbcPluginTest {
               "connection_string": "jdbc:h2:mem:dbx_quirks"
             }
             """);
+        JsonNode cache = MAPPER.readTree("""
+            {
+              "connection_string": "jdbc:Cache://127.0.0.1:1972/USER"
+            }
+            """);
         JsonNode mysql = MAPPER.readTree("""
             {
               "connection_string": "jdbc:mysql://127.0.0.1:9030/demo"
@@ -363,8 +368,12 @@ final class DbxJdbcPluginTest {
         assertEquals(false, DbxJdbcPlugin.driverQuirks(h2).caseInsensitiveSchemaMetadata());
         assertEquals(false, DbxJdbcPlugin.driverQuirks(h2).useCatalogFallbackSql());
         assertEquals(
-            DbxJdbcPlugin.StatementMaxRowsMode.APPLY_STATEMENT_MAX_ROWS,
+            DbxJdbcPlugin.StatementMaxRowsMode.READ_LOOP_ONLY,
             DbxJdbcPlugin.driverQuirks(h2).statementMaxRowsMode()
+        );
+        assertEquals(
+            DbxJdbcPlugin.StatementMaxRowsMode.READ_LOOP_ONLY,
+            DbxJdbcPlugin.driverQuirks(cache).statementMaxRowsMode()
         );
         assertEquals(true, DbxJdbcPlugin.driverQuirks(mysql).useCatalogFallbackSql());
         assertEquals(true, DbxJdbcPlugin.driverQuirks(kingbase).ignoreCatalogForSchemaMetadata());
@@ -398,7 +407,7 @@ final class DbxJdbcPluginTest {
     }
 
     @Test
-    void defaultStatementOptionsApplyDriverMaxRowsProtection() throws Exception {
+    void defaultStatementOptionsSkipDriverMaxRowsRewrite() throws Exception {
         Method method = DbxJdbcPlugin.class.getDeclaredMethod(
             "applyStatementOptions",
             Statement.class,
@@ -416,6 +425,31 @@ final class DbxJdbcPluginTest {
         List<String> calls = new ArrayList<>();
 
         method.invoke(null, recordingStatement(calls), 100, 50, 30, DbxJdbcPlugin.driverQuirks(h2));
+
+        assertFalse(calls.contains("setMaxRows"), calls.toString());
+        assertEquals(true, calls.contains("setFetchSize"));
+        assertEquals(true, calls.contains("setQueryTimeout"));
+    }
+
+    @Test
+    void optInStatementOptionsCanApplyDriverMaxRowsProtection() throws Exception {
+        Method method = DbxJdbcPlugin.class.getDeclaredMethod(
+            "applyStatementOptions",
+            Statement.class,
+            int.class,
+            int.class,
+            int.class,
+            DbxJdbcPlugin.JdbcDriverQuirks.class
+        );
+        method.setAccessible(true);
+        JsonNode yashan = MAPPER.readTree("""
+            {
+              "connection_string": "jdbc:yasdb://127.0.0.1:1688/yasdb"
+            }
+            """);
+        List<String> calls = new ArrayList<>();
+
+        method.invoke(null, recordingStatement(calls), 100, 50, 30, DbxJdbcPlugin.driverQuirks(yashan));
 
         assertEquals(true, calls.contains("setMaxRows"));
         assertEquals(true, calls.contains("setFetchSize"));
