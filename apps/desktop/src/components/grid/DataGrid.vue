@@ -135,7 +135,7 @@ import { useSqlHighlighter } from "@/composables/useSqlHighlighter";
 import { useCellDetailEditor, type UseCellDetailEditorReturn } from "@/composables/useCellDetailEditor";
 import { useTheme } from "@/composables/useTheme";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { nextDataGridSortState, type DataGridSortDirection } from "@/lib/dataGridSort";
+import type { DataGridSortDirection } from "@/lib/dataGridSort";
 import { getTableMetadataCapabilities } from "@/lib/tableMetadataCapabilities";
 import { forgetDataGridConditionHistory, loadDataGridConditionHistory, rememberDataGridConditionHistory } from "@/lib/dataGridConditionHistory";
 
@@ -165,6 +165,8 @@ type ConditionSuggestion = {
   value: string;
   kind: "column" | "history";
 };
+
+type SortMenuValue = "asc" | "desc" | "clear";
 
 const props = defineProps<{
   result: QueryResult;
@@ -348,6 +350,38 @@ function headerColumnSortable(actualColIdx: number): boolean {
   return resolved !== undefined ? resolved : true;
 }
 
+function columnIsSorted(column: string, columnIndex: number): boolean {
+  return sortCol.value === column && sortColIndex.value === columnIndex;
+}
+
+function sortMenuItems(column: string, columnIndex: number) {
+  return [
+    {
+      label: t("grid.sortAscending"),
+      value: "asc",
+      icon: ArrowUp,
+      checked: columnIsSorted(column, columnIndex) && sortDir.value === "asc",
+    },
+    {
+      label: t("grid.sortDescending"),
+      value: "desc",
+      icon: ArrowDown,
+      checked: columnIsSorted(column, columnIndex) && sortDir.value === "desc",
+    },
+    {
+      label: t("grid.clearSort"),
+      value: "clear",
+      icon: ArrowUpDown,
+      disabled: !columnIsSorted(column, columnIndex),
+      separatorBefore: true,
+    },
+  ];
+}
+
+function selectedSortMenuValue(column: string, columnIndex: number): SortMenuValue | undefined {
+  return columnIsSorted(column, columnIndex) ? sortDir.value : undefined;
+}
+
 function typeColorClass(t: string): string {
   // Strip precision/scale suffix like (20,6)
   const base = t.replace(/\(.*\)$/, "").toLowerCase();
@@ -475,6 +509,7 @@ type StructuredFilterRule = {
 const localColumnFilters = ref<Record<number, Set<string>>>({});
 const localFilterOpenColumn = ref<number | null>(null);
 const headerActionMenuOpenColumn = ref<number | null>(null);
+const headerSortMenuOpenColumn = ref<number | null>(null);
 const headerPanelDismissGuardUntil = ref(0);
 const localFilterSearch = ref("");
 const localFilterDraft = ref<LocalColumnFilterDraft | null>(null);
@@ -3465,23 +3500,10 @@ function setDetailNull() {
   detailCell.value = { ...detailCell.value! };
 }
 
-function toggleSort(colName: string, colIdx: number) {
+function applyColumnSort(column: string, columnIndex: number, direction: "asc" | "desc" | null) {
   if (getIsResizing()) return;
   currentPage.value = 1;
   resetGridVerticalScroll(true);
-  const next = nextDataGridSortState({ column: sortCol.value, columnIndex: sortColIndex.value, direction: sortDir.value }, colName, colIdx);
-  sortCol.value = next.column;
-  sortColIndex.value = next.columnIndex;
-  sortDir.value = next.direction;
-  syncOrderByInputWithSort(next.column, next.column ? next.direction : null);
-  emit("sort", colName, colIdx, next.column ? next.direction : null, currentWhereInput());
-}
-
-function applyContextSort(direction: "asc" | "desc" | null) {
-  if (!contextColumn.value || !contextCell.value) return;
-  const column = contextColumn.value;
-  const columnIndex = contextCell.value.col;
-  currentPage.value = 1;
   if (direction) {
     sortCol.value = column;
     sortColIndex.value = columnIndex;
@@ -3494,6 +3516,15 @@ function applyContextSort(direction: "asc" | "desc" | null) {
     syncOrderByInputWithSort(null, null);
   }
   emit("sort", column, columnIndex, direction, currentWhereInput());
+}
+
+function selectHeaderSort(value: string, column: string, columnIndex: number) {
+  applyColumnSort(column, columnIndex, value === "clear" ? null : (value as DataGridSortDirection));
+}
+
+function applyContextSort(direction: "asc" | "desc" | null) {
+  if (!contextColumn.value || !contextCell.value) return;
+  applyColumnSort(contextColumn.value, contextCell.value.col, direction);
 }
 
 async function contextFilterCondition(mode: FilterMode): Promise<string | null> {
@@ -6788,18 +6819,35 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                             {{ headerColumnComment(col.name) }}
                           </span>
                         </span>
-                        <button
+                        <LightDropdownMenu
                           v-if="headerColumnSortable(col.actualColIdx)"
-                          type="button"
-                          class="flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-gray-200 dark:hover:bg-gray-800 hover:text-foreground"
-                          :class="sortCol === col.name && sortColIndex === col.actualColIdx ? 'text-primary opacity-100' : 'opacity-80'"
-                          :title="t('grid.sort')"
-                          @click.stop="toggleSort(col.name, col.actualColIdx)"
+                          :items="sortMenuItems(col.name, col.actualColIdx)"
+                          :open="headerSortMenuOpenColumn === col.actualColIdx"
+                          :selected-value="selectedSortMenuValue(col.name, col.actualColIdx)"
+                          align="end"
+                          content-class="w-max min-w-28 p-0.5"
+                          item-class="gap-1 px-1.5 py-0.5 text-xs"
+                          item-icon-class="h-3 w-3"
+                          :match-trigger-width="false"
+                          @update:open="(value: boolean) => (headerSortMenuOpenColumn = value ? col.actualColIdx : null)"
+                          @select="(value: string) => selectHeaderSort(value, col.name, col.actualColIdx)"
                         >
-                          <ArrowUp v-if="sortCol === col.name && sortColIndex === col.actualColIdx && sortDir === 'asc'" class="h-3 w-3 shrink-0" />
-                          <ArrowDown v-else-if="sortCol === col.name && sortColIndex === col.actualColIdx && sortDir === 'desc'" class="h-3 w-3 shrink-0" />
-                          <ArrowUpDown v-else class="h-3 w-3 shrink-0" />
-                        </button>
+                          <template #trigger="{ open, toggle }">
+                            <button
+                              type="button"
+                              class="flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-gray-200 dark:hover:bg-gray-800 hover:text-foreground"
+                              :class="columnIsSorted(col.name, col.actualColIdx) ? 'text-primary opacity-100' : 'opacity-80'"
+                              :title="t('grid.sort')"
+                              :aria-expanded="open"
+                              @mousedown.stop
+                              @click.stop="toggle"
+                            >
+                              <ArrowUp v-if="columnIsSorted(col.name, col.actualColIdx) && sortDir === 'asc'" class="h-3 w-3 shrink-0" />
+                              <ArrowDown v-else-if="columnIsSorted(col.name, col.actualColIdx) && sortDir === 'desc'" class="h-3 w-3 shrink-0" />
+                              <ArrowUpDown v-else class="h-3 w-3 shrink-0" />
+                            </button>
+                          </template>
+                        </LightDropdownMenu>
                         <LightDropdownMenu
                           v-if="compactColumnHeaderActions"
                           :items="compactColumnActionMenuItems(col.name)"
