@@ -72,6 +72,8 @@ type DataGridHandle = {
   toggleColumnVisibility: (columnIndex: number) => void;
   showAllColumns: () => void;
   invertColumnVisibility: () => void;
+  hasCustomColumnOrder: boolean;
+  resetColumnOrder: () => void;
   nullColumnsHidden: boolean;
   allNullColumnCount: number;
   canToggleAllNullColumns: boolean;
@@ -849,6 +851,9 @@ defineExpose({ focusSearch, refreshData, handleModRTarget });
                 <div class="flex items-center gap-1">
                   <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" :disabled="(dataGridRef?.displayableColumnCount ?? 0) <= 1" @click="dataGridRef?.invertColumnVisibility()">
                     {{ t("grid.invertColumnVisibility") }}
+                  </Button>
+                  <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" :disabled="!dataGridRef?.hasCustomColumnOrder" @click="dataGridRef?.resetColumnOrder()">
+                    {{ t("grid.resetColumnOrder") }}
                   </Button>
                   <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" :disabled="(dataGridRef?.hiddenColumnCount ?? 0) === 0" @click="dataGridRef?.showAllColumns()">
                     {{ t("grid.showAllColumns") }}

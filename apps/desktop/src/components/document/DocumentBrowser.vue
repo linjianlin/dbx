@@ -838,6 +838,9 @@ function resetTableSearchSplitWidth() {
               <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" :disabled="(dataGridRef?.displayableColumnCount ?? 0) <= 1" @click="dataGridRef?.invertColumnVisibility()">
                 {{ t("grid.invertColumnVisibility") }}
               </Button>
+              <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" :disabled="!dataGridRef?.hasCustomColumnOrder" @click="dataGridRef?.resetColumnOrder()">
+                {{ t("grid.resetColumnOrder") }}
+              </Button>
               <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" :disabled="(dataGridRef?.hiddenColumnCount ?? 0) === 0" @click="dataGridRef?.showAllColumns()">
                 {{ t("grid.showAllColumns") }}
               </Button>
