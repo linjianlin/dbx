@@ -1301,6 +1301,18 @@ export async function mongoListCollections(connectionId: string, database: strin
   return invoke("mongo_list_collections", { connectionId, database });
 }
 
+export async function mongoCreateDatabase(connectionId: string, database: string): Promise<void> {
+  return invoke("mongo_create_database", { connectionId, database });
+}
+
+export async function mongoDropDatabase(connectionId: string, database: string): Promise<void> {
+  return invoke("mongo_drop_database", { connectionId, database });
+}
+
+export async function mongoDropCollection(connectionId: string, database: string, collection: string): Promise<void> {
+  return invoke("mongo_drop_collection", { connectionId, database, collection });
+}
+
 export async function elasticsearchListIndices(connectionId: string): Promise<string[]> {
   return mongoListCollections(connectionId, "default");
 }

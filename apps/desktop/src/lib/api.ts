@@ -328,6 +328,9 @@ export const mqRawRequest = forward("mqRawRequest");
 // MongoDB
 export const mongoListDatabases = forward("mongoListDatabases");
 export const mongoListCollections = forward("mongoListCollections");
+export const mongoCreateDatabase = forward("mongoCreateDatabase");
+export const mongoDropDatabase = forward("mongoDropDatabase");
+export const mongoDropCollection = forward("mongoDropCollection");
 export const documentFindDocuments = forward("documentFindDocuments");
 export const mongoFindDocuments = forward("mongoFindDocuments");
 export const mongoAggregateDocuments = forward("mongoAggregateDocuments");
