@@ -1894,7 +1894,7 @@ export const useQueryStore = defineStore("query", () => {
         tab.executionId = undefined;
         const error = new Error(t("editor.connectionMayBeLost"));
         tab.result = toErrorResult(error);
-        connStore.recordConnectionLostError(tab.connectionId, error);
+        connStore.markConnectionLost(tab.connectionId, error);
       });
     }
   }

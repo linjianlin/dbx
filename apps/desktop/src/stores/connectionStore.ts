@@ -260,11 +260,23 @@ export const useConnectionStore = defineStore("connection", () => {
     return message;
   }
 
-  function recordConnectionLostError(connectionId: string, error: unknown) {
+  function markConnectionLost(connectionId: string, error: unknown) {
+    connectedIds.value.delete(connectionId);
+    if (activeConnectionId.value === connectionId) activeConnectionId.value = null;
+    recordConnectionError(connectionId, error);
+  }
+
+  function recordConnectionLostError(connectionId: string, error: unknown): boolean {
     if (shouldMarkDisconnected(error)) {
-      connectedIds.value.delete(connectionId);
-      if (activeConnectionId.value === connectionId) activeConnectionId.value = null;
+      markConnectionLost(connectionId, error);
+      return true;
     }
+    return false;
+  }
+
+  // Metadata loaders keep this internal: match connection-loss errors before recording generic errors.
+  function recordMetadataLoadError(connectionId: string, error: unknown) {
+    if (recordConnectionLostError(connectionId, error)) return;
     recordConnectionError(connectionId, error);
   }
 
@@ -1030,7 +1042,7 @@ export const useConnectionStore = defineStore("connection", () => {
       }
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(connectionId, e);
+      recordMetadataLoadError(connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1073,7 +1085,7 @@ export const useConnectionStore = defineStore("connection", () => {
       );
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(connectionId, e);
+      recordMetadataLoadError(connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1107,7 +1119,7 @@ export const useConnectionStore = defineStore("connection", () => {
       );
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(connectionId, e);
+      recordMetadataLoadError(connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1137,7 +1149,7 @@ export const useConnectionStore = defineStore("connection", () => {
       );
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(connectionId, e);
+      recordMetadataLoadError(connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1201,7 +1213,7 @@ export const useConnectionStore = defineStore("connection", () => {
       );
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(connectionId, e);
+      recordMetadataLoadError(connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1233,7 +1245,7 @@ export const useConnectionStore = defineStore("connection", () => {
       );
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(connectionId, e);
+      recordMetadataLoadError(connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1265,7 +1277,7 @@ export const useConnectionStore = defineStore("connection", () => {
       );
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(connectionId, e);
+      recordMetadataLoadError(connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1293,7 +1305,7 @@ export const useConnectionStore = defineStore("connection", () => {
       );
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(connectionId, e);
+      recordMetadataLoadError(connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1332,7 +1344,7 @@ export const useConnectionStore = defineStore("connection", () => {
       await savePersistedTreeChildren(cacheKey, children);
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(connectionId, e);
+      recordMetadataLoadError(connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1368,7 +1380,7 @@ export const useConnectionStore = defineStore("connection", () => {
       await savePersistedTreeChildren(cacheKey, children);
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(connectionId, e);
+      recordMetadataLoadError(connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1401,7 +1413,7 @@ export const useConnectionStore = defineStore("connection", () => {
       );
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(connectionId, e);
+      recordMetadataLoadError(connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1436,7 +1448,7 @@ export const useConnectionStore = defineStore("connection", () => {
       );
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(connectionId, e);
+      recordMetadataLoadError(connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1478,7 +1490,7 @@ export const useConnectionStore = defineStore("connection", () => {
       );
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(node.connectionId, e);
+      recordMetadataLoadError(node.connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1534,7 +1546,7 @@ export const useConnectionStore = defineStore("connection", () => {
       await savePersistedTreeChildren(cacheKey, children);
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(connectionId, e);
+      recordMetadataLoadError(connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1594,7 +1606,7 @@ export const useConnectionStore = defineStore("connection", () => {
       }
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(node.connectionId, e);
+      recordMetadataLoadError(node.connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1633,7 +1645,7 @@ export const useConnectionStore = defineStore("connection", () => {
       await savePersistedTreeChildren(objectGroupCacheKey(parent), nextChildren);
       parent.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(parent.connectionId, e);
+      recordMetadataLoadError(parent.connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1765,7 +1777,7 @@ export const useConnectionStore = defineStore("connection", () => {
       );
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(connectionId, e);
+      recordMetadataLoadError(connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1802,7 +1814,7 @@ export const useConnectionStore = defineStore("connection", () => {
       );
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(connectionId, e);
+      recordMetadataLoadError(connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1843,7 +1855,7 @@ export const useConnectionStore = defineStore("connection", () => {
       );
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(connectionId, e);
+      recordMetadataLoadError(connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -1880,7 +1892,7 @@ export const useConnectionStore = defineStore("connection", () => {
       );
       node.isExpanded = true;
     } catch (e) {
-      recordConnectionLostError(connectionId, e);
+      recordMetadataLoadError(connectionId, e);
       throw e;
     } finally {
       node.isLoading = false;
@@ -3049,6 +3061,7 @@ export const useConnectionStore = defineStore("connection", () => {
     setConnectionError,
     clearConnectionError,
     recordConnectionError,
+    markConnectionLost,
     recordConnectionLostError,
     sidebarLayout,
     getConfig,
