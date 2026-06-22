@@ -484,6 +484,7 @@ const driverProfiles: Record<
   h2: { type: "h2", port: 9092, user: "sa", label: "H2", icon: "h2" },
   snowflake: { type: "snowflake", port: 443, user: "", label: "Snowflake", icon: "snowflake" },
   trino: { type: "trino", port: 8080, user: "", label: "Trino", icon: "trino" },
+  prestosql: { type: "prestosql", port: 8080, user: "", label: "PrestoSQL", icon: "presto" },
   hive: { type: "hive", port: 10000, user: "", label: "Apache Hive", icon: "hive" },
   db2: { type: "db2", port: 50000, user: "db2inst1", label: "IBM DB2", icon: "db2" },
   informix: { type: "informix", port: 9088, user: "informix", label: "Informix", icon: "informix" },
@@ -674,6 +675,13 @@ function applyProfile(val: string, preserveConnectionFields = false) {
       form.value.jdbc_driver_paths = [];
       jdbcDriverPathsInput.value = "";
     }
+    if (profile.type === "prestosql") {
+      form.value.connection_string = undefined;
+      form.value.jdbc_driver_class = "io.prestosql.jdbc.PrestoDriver";
+      form.value.jdbc_driver_paths = [];
+      jdbcDriverPathsInput.value = "";
+      jdbcManualClasspathOpen.value = true;
+    }
     if (profile.type === "mq") {
       resetMqFields();
       form.value.database = undefined;
@@ -763,6 +771,7 @@ watch(
       }
       mongoUseUrl.value = !!config.connection_string;
       jdbcDriverPathsInput.value = (config.jdbc_driver_paths || []).join("\n");
+      jdbcManualClasspathOpen.value = config.db_type === "prestosql" || (config.jdbc_driver_paths || []).length > 0;
       customDriverName.value = isCustomCompatibleProfile() ? config.driver_label || "" : "";
       dialogStep.value = "config";
       configTab.value = "connection";
@@ -913,6 +922,7 @@ const iconTypeMap: Record<string, string> = {
   h2: "h2",
   snowflake: "snowflake",
   trino: "trino",
+  prestosql: "prestosql",
   hive: "hive",
   db2: "db2",
   informix: "informix",
@@ -977,6 +987,7 @@ const dbOptions: DbOption[] = [
   { value: "h2", label: "H2" },
   { value: "snowflake", label: "Snowflake" },
   { value: "trino", label: "Trino" },
+  { value: "prestosql", label: "PrestoSQL" },
   { value: "hive", label: "Hive" },
   { value: "db2", label: "DB2" },
   { value: "informix", label: "Informix" },
@@ -1022,7 +1033,9 @@ const filteredDbCategories = computed<DbCategory[]>(() => {
 
 const hasDbPickerResults = computed(() => filteredDbCategories.value.some((category) => category.options.length > 0));
 const selectedDbIcon = computed(() => iconTypeMap[selectedType.value] || selectedProfile().icon || selectedType.value);
+const jdbcBackedDatabaseTypes = new Set<DatabaseType>(["jdbc", "prestosql"]);
 const isJdbcConnection = computed(() => form.value.db_type === "jdbc");
+const isPrestoSqlConnection = computed(() => form.value.db_type === "prestosql");
 const isH2FileMode = computed(() => form.value.db_type === "h2" && h2ConnectionMode.value === "file");
 const usesLocalFilePathInput = computed(() => isLocalFileTypeDb(form.value.db_type) && (form.value.db_type !== "h2" || isH2FileMode.value));
 
@@ -1369,10 +1382,15 @@ function connectionConfigForSubmit(id: string): ConnectionConfig {
   } else {
     config.ca_cert_path = config.ca_cert_path?.trim() || "";
   }
-  if (config.db_type === "jdbc") {
-    config.host = "";
-    config.port = 0;
-    config.connection_string = config.connection_string?.trim() || "";
+  if (jdbcBackedDatabaseTypes.has(config.db_type)) {
+    if (config.db_type === "jdbc") {
+      config.host = "";
+      config.port = 0;
+      config.connection_string = config.connection_string?.trim() || "";
+    } else if (config.db_type === "prestosql") {
+      config.connection_string = undefined;
+      config.jdbc_driver_class = config.jdbc_driver_class?.trim() || "io.prestosql.jdbc.PrestoDriver";
+    }
     config.jdbc_driver_class = config.jdbc_driver_class?.trim() || undefined;
     config.jdbc_driver_paths = jdbcDriverPathsInput.value
       .split(/\r?\n/)
@@ -2497,7 +2515,7 @@ function openExternalUrl(url: string) {
                 </div>
 
                 <!-- JDBC: optional external plugin -->
-                <template v-if="form.db_type === 'jdbc'">
+                <template v-if="isJdbcConnection">
                   <div class="grid grid-cols-4 items-center gap-4">
                     <Label class="text-right">{{ t("connection.jdbcUrl") }}</Label>
                     <Input v-model="form.connection_string" class="col-span-3" :placeholder="t('connection.jdbcUrlPlaceholder')" />
@@ -2560,6 +2578,10 @@ function openExternalUrl(url: string) {
                         {{ t("connection.jdbcPluginHint") }}
                       </p>
                       <div class="flex flex-wrap gap-2">
+                        <Button type="button" variant="outline" size="sm" @click="emit('openDriverStore')">
+                          <FolderOpen class="h-3.5 w-3.5" />
+                          {{ t("toolbar.driverManager") }}
+                        </Button>
                         <Button type="button" variant="outline" size="sm" @click="openExternalUrl('https://dbxio.com')">
                           <ExternalLink class="h-3.5 w-3.5" />
                           {{ t("connection.jdbcDocs") }}
@@ -3071,6 +3093,70 @@ function openExternalUrl(url: string) {
                       "
                     />
                   </div>
+
+                  <template v-if="isPrestoSqlConnection">
+                    <div class="grid grid-cols-4 items-start gap-4">
+                      <Label class="text-right mt-2">{{ t("connection.jdbcDriverPaths") }}</Label>
+                      <div class="col-span-3 space-y-2">
+                        <Select v-if="jdbcDriverSelectItems.length > 0" :model-value="selectedJdbcDriverPath" @update:model-value="onJdbcDriverSelect">
+                          <SelectTrigger>
+                            <SelectValue :placeholder="t('connection.jdbcDriverSelectPlaceholder')" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem v-for="driver in jdbcDriverSelectItems" :key="driver.id" :value="driver.id">
+                              {{ driver.label }}
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <div class="flex items-center justify-between gap-3 rounded-md border bg-muted/20 px-3 py-2">
+                          <div class="flex min-w-0 items-center gap-2">
+                            <div class="truncate text-xs font-medium">{{ t("connection.jdbcManualClasspath") }}</div>
+                            <Badge variant="outline" class="h-5 shrink-0 rounded-full px-2 text-[10px] font-medium">
+                              {{ t("connection.jdbcManualClasspathCount", { count: jdbcManualClasspathCount }) }}
+                            </Badge>
+                          </div>
+                          <Switch v-model="jdbcManualClasspathOpen" />
+                        </div>
+                        <div v-if="jdbcManualClasspathOpen" class="flex items-start gap-1">
+                          <textarea
+                            v-model="jdbcDriverPathsInput"
+                            class="flex min-h-12 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            :placeholder="t('connection.jdbcDriverPathsPlaceholder')"
+                          />
+                          <Tooltip v-if="isDesktop">
+                            <TooltipTrigger as-child>
+                              <Button type="button" variant="outline" size="icon" class="h-9 w-9 shrink-0" @click="browseJdbcDriverPaths">
+                                <FolderOpen class="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{{ t("connection.jdbcDriverBrowse") }}</TooltipContent>
+                          </Tooltip>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="grid grid-cols-4 items-center gap-4">
+                      <Label class="text-right">{{ t("connection.jdbcDriverClass") }}</Label>
+                      <Input v-model="form.jdbc_driver_class" class="col-span-3" :placeholder="t('connection.jdbcDriverClassPlaceholder')" />
+                    </div>
+                    <div class="grid grid-cols-4 items-start gap-4">
+                      <span />
+                      <div class="col-span-3 space-y-2">
+                        <p class="text-xs text-muted-foreground">
+                          {{ t("connection.jdbcPluginHint") }}
+                        </p>
+                        <div class="flex flex-wrap gap-2">
+                          <Button type="button" variant="outline" size="sm" @click="emit('openDriverStore')">
+                            <FolderOpen class="h-3.5 w-3.5" />
+                            {{ t("toolbar.driverManager") }}
+                          </Button>
+                          <Button type="button" variant="outline" size="sm" @click="openExternalUrl('https://dbxio.com')">
+                            <ExternalLink class="h-3.5 w-3.5" />
+                            {{ t("connection.jdbcDocs") }}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
                 </template>
               </div>
             </TabsContent>

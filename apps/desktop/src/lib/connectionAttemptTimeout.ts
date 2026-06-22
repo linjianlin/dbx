@@ -26,6 +26,7 @@ const AGENT_DRIVER_TYPES = new Set<DatabaseType>([
   "h2",
   "snowflake",
   "trino",
+  "prestosql",
   "hive",
   "db2",
   "informix",
