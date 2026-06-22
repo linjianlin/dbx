@@ -267,6 +267,17 @@ pub async fn update_document(
 ) -> Result<u64, String> {
     let value: serde_json::Value = serde_json::from_str(doc_json).map_err(|e| format!("Invalid JSON: {e}"))?;
     let col = client.database(database).collection::<Document>(collection);
+    let update_doc = json_object_to_document(&value).map_err(|e| format!("Invalid document: {e}"))?;
+    if is_update_operator_document(&update_doc) {
+        for filter in document_id_filters(id) {
+            let result = col.update_one(filter, update_doc.clone()).await.map_err(|e| e.to_string())?;
+            if result.matched_count > 0 {
+                return Ok(result.modified_count);
+            }
+        }
+        return Ok(0);
+    }
+
     for filter in document_id_filters(id) {
         let current = col.find_one(filter.clone()).await.map_err(|e| e.to_string())?;
         let mut new_doc = json_object_to_document_preserving_existing(&value, current.as_ref())
@@ -278,6 +289,10 @@ pub async fn update_document(
         }
     }
     Ok(0)
+}
+
+fn is_update_operator_document(doc: &Document) -> bool {
+    !doc.is_empty() && doc.keys().all(|key| key.starts_with('$'))
 }
 
 pub async fn update_documents(
@@ -447,7 +462,9 @@ fn json_value_to_bson(value: &serde_json::Value) -> Bson {
                 Bson::Null
             }
         }
-        serde_json::Value::String(s) => Bson::String(s.clone()),
+        serde_json::Value::String(s) => {
+            parse_mongo_shell_date(s).map(Bson::DateTime).unwrap_or_else(|| Bson::String(s.clone()))
+        }
         serde_json::Value::Array(arr) => Bson::Array(arr.iter().map(json_value_to_bson).collect()),
         serde_json::Value::Object(obj) => {
             // Extended JSON: {"$oid":"..."} → BSON ObjectId
@@ -465,6 +482,48 @@ fn json_value_to_bson(value: &serde_json::Value) -> Bson {
             Bson::Document(doc)
         }
     }
+}
+
+fn parse_mongo_shell_date(value: &str) -> Option<DateTime> {
+    let trimmed = value.trim();
+    if let Some(inner) = trimmed.strip_prefix("ISODate(").or_else(|| trimmed.strip_prefix("new Date(")) {
+        let inner = inner.strip_suffix(')')?.trim();
+        let quoted = inner
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .or_else(|| inner.strip_prefix('\'').and_then(|value| value.strip_suffix('\'')))?;
+        return DateTime::parse_rfc3339_str(quoted).ok();
+    }
+    parse_legacy_mongo_date_display(trimmed)
+}
+
+fn parse_legacy_mongo_date_display(value: &str) -> Option<DateTime> {
+    let (date, time) = value.split_once(' ').or_else(|| value.split_once('T'))?;
+    if date.len() != 10 || time.len() < 8 || time.len() > 12 {
+        return None;
+    }
+    if !date
+        .chars()
+        .enumerate()
+        .all(|(index, ch)| matches!(index, 4 | 7) && ch == '-' || !matches!(index, 4 | 7) && ch.is_ascii_digit())
+    {
+        return None;
+    }
+    let (seconds, millis) = time.split_once('.').unwrap_or((time, "000"));
+    if seconds.len() != 8 || millis.is_empty() || millis.len() > 3 {
+        return None;
+    }
+    if !seconds
+        .chars()
+        .enumerate()
+        .all(|(index, ch)| matches!(index, 2 | 5) && ch == ':' || !matches!(index, 2 | 5) && ch.is_ascii_digit())
+    {
+        return None;
+    }
+    if !millis.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    DateTime::parse_rfc3339_str(format!("{date}T{seconds}.{}Z", format!("{millis:0<3}"))).ok()
 }
 
 fn parse_extended_json_date(obj: &serde_json::Map<String, serde_json::Value>) -> Option<DateTime> {
@@ -707,6 +766,39 @@ mod tests {
             doc.get("updated_at"),
             Some(Bson::DateTime(value)) if value.timestamp_millis() == 1_781_099_971_287
         ));
+    }
+
+    #[test]
+    fn json_object_to_document_parses_mongo_shell_isodate_strings() {
+        let value = serde_json::json!({
+            "created_at": "ISODate(\"2026-06-10T13:59:31.287Z\")",
+            "updated_at": "new Date('2026-06-10T14:59:31.287Z')",
+        });
+        let doc = json_object_to_document(&value).unwrap();
+
+        assert!(matches!(doc.get("created_at"), Some(Bson::DateTime(_))));
+        assert!(matches!(doc.get("updated_at"), Some(Bson::DateTime(_))));
+    }
+
+    #[test]
+    fn json_object_to_document_parses_legacy_date_display_strings() {
+        let value = serde_json::json!({
+            "created_at": "2025-08-14 02:25:43.718",
+        });
+        let doc = json_object_to_document(&value).unwrap();
+
+        assert!(matches!(
+            doc.get("created_at"),
+            Some(Bson::DateTime(value)) if value.timestamp_millis() == 1_755_138_343_718
+        ));
+    }
+
+    #[test]
+    fn detects_update_operator_documents() {
+        assert!(is_update_operator_document(&doc! { "$set": { "name": "Ada" } }));
+        assert!(is_update_operator_document(&doc! { "$set": { "name": "Ada" }, "$unset": { "old": "" } }));
+        assert!(!is_update_operator_document(&doc! { "name": "Ada" }));
+        assert!(!is_update_operator_document(&Document::new()));
     }
 
     #[test]
