@@ -1211,6 +1211,7 @@ export const useQueryStore = defineStore("query", () => {
     }
     const countSql = options.countSql;
     const clientSessionId = tabClientSessionId({ id: options.tabId }, "count");
+    const countExecutionId = `${options.executionId}:count`;
 
     if (typeof options.pageLimit === "number" && resultRowCount < options.pageLimit) {
       setQueryTotalRowCountIfCurrent(options.tabId, options.executionId, options.result, (options.pageOffset ?? 0) + resultRowCount);
@@ -1220,7 +1221,7 @@ export const useQueryStore = defineStore("query", () => {
     void (async () => {
       try {
         console.info("[DBX][executeTabSql:count:start]", { traceId: options.traceId, elapsed: options.elapsed() });
-        const countResult = await api.executeQuery(options.connectionId, options.database, countSql, options.schema, undefined, {
+        const countResult = await api.executeQuery(options.connectionId, options.database, countSql, options.schema, countExecutionId, {
           clientSessionId,
           timeoutSecs: options.timeoutSecs,
         });
@@ -2040,6 +2041,7 @@ export const useQueryStore = defineStore("query", () => {
       let executionTimeMs = 0;
       let offset = 0;
       const clientSessionId = tabClientSessionId(tab, "export");
+      const exportExecutionId = uuid();
 
       try {
         while (true) {
@@ -2055,7 +2057,7 @@ export const useQueryStore = defineStore("query", () => {
             limit: pageLimit,
             offset,
           });
-          const results = await api.executeMulti(tab.connectionId, tab.database, sql, undefined, undefined, {
+          const results = await api.executeMulti(tab.connectionId, tab.database, sql, undefined, exportExecutionId, {
             maxRows: pageLimit,
             fetchSize: pageLimit,
             clientSessionId,
@@ -2106,6 +2108,7 @@ export const useQueryStore = defineStore("query", () => {
     let offset = 0;
     let sessionId: string | undefined;
     const clientSessionId = tabClientSessionId(tab, "export");
+    const exportExecutionId = uuid();
 
     try {
       while (true) {
@@ -2126,7 +2129,7 @@ export const useQueryStore = defineStore("query", () => {
               timeoutSecs: queryTimeoutSecs,
             }
           : { maxRows: plan.pageLimit, fetchSize: plan.pageLimit, clientSessionId, timeoutSecs: queryTimeoutSecs };
-        const results = await api.executeMulti(tab.connectionId, tab.database, plan.sqlToExecute, tab.schema, undefined, executionOptions);
+        const results = await api.executeMulti(tab.connectionId, tab.database, plan.sqlToExecute, tab.schema, exportExecutionId, executionOptions);
         const result = results[0];
         if (!result) break;
         if (columns.length === 0) columns = result.columns;

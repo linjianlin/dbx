@@ -805,6 +805,12 @@ pub async fn do_execute(
     cancel_token: Option<CancellationToken>,
     options: QueryExecutionOptions,
 ) -> Result<db::QueryResult, String> {
+    if let Some(execution_id) = options.execution_id.as_deref() {
+        state.running_queries.set_pool_key(execution_id, pool_key.to_string());
+    }
+    state.touch_pool_activity(pool_key).await;
+    let _activity_touch = state.pool_activity_touch(pool_key);
+
     let query_timeout = resolve_query_timeout(options.timeout_secs);
     let (_duckdb_attached_names, conn_name_if_readonly) = {
         let configs = state.configs.read().await;
@@ -1257,6 +1263,11 @@ async fn execute_postgres_drop_database(
     let pool_key = state
         .get_or_create_pool_for_session(connection_id, Some(admin_database), options.client_session_id.as_deref())
         .await?;
+    if let Some(execution_id) = options.execution_id.as_deref() {
+        state.running_queries.set_pool_key(execution_id, pool_key.clone());
+    }
+    state.touch_pool_activity(&pool_key).await;
+    let _activity_touch = state.pool_activity_touch(pool_key.as_str());
 
     if is_canceled(&cancel_token) {
         return Err(canceled_error());
@@ -1390,6 +1401,11 @@ pub async fn execute_multi_core_with_options(
             .get_or_create_pool_for_session(connection_id, Some(database), options.client_session_id.as_deref())
             .await?
     };
+    if let Some(execution_id) = options.execution_id.as_deref() {
+        state.running_queries.set_pool_key(execution_id, pool_key.clone());
+    }
+    state.touch_pool_activity(&pool_key).await;
+    let _activity_touch = state.pool_activity_touch(pool_key.as_str());
 
     let is_sqlserver = {
         let connections = state.connections.read().await;

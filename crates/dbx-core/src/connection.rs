@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
@@ -84,6 +84,7 @@ pub enum PoolKind {
 pub struct AppState {
     pub connections: Arc<RwLock<HashMap<String, PoolKind>>>,
     keepalive_tasks: Arc<RwLock<HashMap<String, JoinHandle<()>>>>,
+    pool_activity: Arc<RwLock<HashMap<String, PoolActivity>>>,
     pub configs: RwLock<HashMap<String, ConnectionConfig>>,
     pub running_queries: RunningQueries,
     pub tunnels: TunnelManager,
@@ -93,6 +94,40 @@ pub struct AppState {
     pub agent_manager: crate::agent_manager::AgentManager,
     #[cfg(feature = "mq-admin")]
     pub mq_registry: crate::mq::MqAdminRegistry,
+}
+
+#[derive(Clone, Copy)]
+struct PoolActivity {
+    last_used_at: Instant,
+}
+
+impl PoolActivity {
+    fn now() -> Self {
+        Self { last_used_at: Instant::now() }
+    }
+}
+
+pub struct PoolActivityTouch {
+    pool_key: String,
+    connections: Arc<RwLock<HashMap<String, PoolKind>>>,
+    pool_activity: Arc<RwLock<HashMap<String, PoolActivity>>>,
+}
+
+impl Drop for PoolActivityTouch {
+    fn drop(&mut self) {
+        let pool_key = self.pool_key.clone();
+        let connections = self.connections.clone();
+        let pool_activity = self.pool_activity.clone();
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        handle.spawn(async move {
+            if !connections.read().await.contains_key(&pool_key) {
+                return;
+            }
+            pool_activity.write().await.insert(pool_key, PoolActivity::now());
+        });
+    }
 }
 
 pub fn metadata_connection_config(config: &ConnectionConfig) -> ConnectionConfig {
@@ -263,6 +298,7 @@ impl AppState {
         Self {
             connections: Arc::new(RwLock::new(HashMap::new())),
             keepalive_tasks: Arc::new(RwLock::new(HashMap::new())),
+            pool_activity: Arc::new(RwLock::new(HashMap::new())),
             configs: RwLock::new(HashMap::new()),
             running_queries: RunningQueries::default(),
             tunnels: TunnelManager::new(),
@@ -326,6 +362,7 @@ impl AppState {
 
     pub async fn insert_connection_pool(&self, pool_key: String, pool: PoolKind, config: &ConnectionConfig) {
         self.stop_keepalive_task(&pool_key).await;
+        self.pool_activity.write().await.insert(pool_key.clone(), PoolActivity::now());
         self.start_keepalive_task(&pool_key, &pool, config).await;
         let previous = self.connections.write().await.insert(pool_key, pool);
         if let Some(pool) = previous {
@@ -335,37 +372,77 @@ impl AppState {
 
     async fn start_keepalive_task(&self, pool_key: &str, pool: &PoolKind, config: &ConnectionConfig) {
         let interval_secs = config.keepalive_interval_secs;
-        if interval_secs == 0 {
+        let idle_timeout_secs = config.idle_timeout_secs;
+        let idle_cleanup_enabled = is_session_scoped_pool_key(pool_key) && idle_timeout_secs > 0;
+        let mut target = keepalive_target_from_pool(pool, config);
+        if interval_secs == 0 && !idle_cleanup_enabled {
             return;
         }
-        let Some(mut target) = keepalive_target_from_pool(pool, config) else {
+        if interval_secs > 0 && target.is_none() {
             log::debug!(
                 "Connection keepalive requested for '{pool_key}', but this database driver does not keep a pingable client handle."
             );
-            return;
+            if !idle_cleanup_enabled {
+                return;
+            }
         };
 
         let key = pool_key.to_string();
-        let interval = Duration::from_secs(interval_secs.max(1));
+        let interval = if interval_secs > 0 {
+            Duration::from_secs(interval_secs.max(1))
+        } else {
+            Duration::from_secs(idle_timeout_secs.min(60).max(1))
+        };
         let timeout = Duration::from_secs(config.effective_connect_timeout_secs().max(1));
         let connections = self.connections.clone();
         let keepalive_tasks = self.keepalive_tasks.clone();
+        let pool_activity = self.pool_activity.clone();
+        let running_queries = self.running_queries.clone();
+        let idle_timeout = Duration::from_secs(idle_timeout_secs.max(1));
         let handle = tokio::spawn(async move {
             loop {
                 tokio::time::sleep(interval).await;
-                let result = tokio::time::timeout(timeout, ping_keepalive_target(&mut target, timeout)).await;
-                match result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(err)) => {
-                        log::warn!("Connection keepalive failed for '{key}': {err}; invalidating pool");
+
+                if running_queries.is_pool_active(&key) {
+                    continue;
+                }
+
+                if idle_cleanup_enabled {
+                    let idle_for = {
+                        let activity = pool_activity.read().await;
+                        activity.get(&key).map(|activity| activity.last_used_at.elapsed())
+                    };
+                    if idle_for.is_some_and(|elapsed| elapsed >= idle_timeout) {
+                        log::info!(
+                            "Closing idle session-scoped connection pool '{key}' after {}s",
+                            idle_timeout.as_secs()
+                        );
                         keepalive_tasks.write().await.remove(&key);
+                        pool_activity.write().await.remove(&key);
                         let removed = connections.write().await.remove(&key);
                         if let Some(pool) = removed {
                             close_pool_kind_with_timeout(key, pool).await;
                         }
                         break;
                     }
-                    Err(_) => log::warn!("Connection keepalive timed out for '{key}' after {}s", timeout.as_secs()),
+                }
+
+                if let Some(target) = target.as_mut() {
+                    let result = tokio::time::timeout(timeout, ping_keepalive_target(target, timeout)).await;
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(err)) => {
+                            log::warn!("Connection keepalive failed for '{key}': {err}; invalidating pool");
+                            keepalive_tasks.write().await.remove(&key);
+                            pool_activity.write().await.remove(&key);
+                            let removed = connections.write().await.remove(&key);
+                            if let Some(pool) = removed {
+                                close_pool_kind_with_timeout(key, pool).await;
+                            }
+                            break;
+                        }
+                        Err(_) => log::warn!("Connection keepalive timed out for '{key}' after {}s", timeout.as_secs()),
+                    }
                 }
             }
         });
@@ -391,6 +468,18 @@ impl AppState {
         }
     }
 
+    pub async fn touch_pool_activity(&self, pool_key: &str) {
+        self.pool_activity.write().await.insert(pool_key.to_string(), PoolActivity::now());
+    }
+
+    pub fn pool_activity_touch(&self, pool_key: &str) -> PoolActivityTouch {
+        PoolActivityTouch {
+            pool_key: pool_key.to_string(),
+            connections: self.connections.clone(),
+            pool_activity: self.pool_activity.clone(),
+        }
+    }
+
     pub async fn get_or_create_pool(&self, connection_id: &str, database: Option<&str>) -> Result<String, String> {
         self.get_or_create_pool_for_session(connection_id, database, None).await
     }
@@ -413,6 +502,7 @@ impl AppState {
         if conns.contains_key(&pool_key) {
             drop(conns);
             if !self.remove_stale_connection_pool(&pool_key).await {
+                self.touch_pool_activity(&pool_key).await;
                 return Ok(pool_key);
             }
         } else {
@@ -904,6 +994,10 @@ impl AppState {
     }
 
     async fn remove_stale_connection_pool(&self, pool_key: &str) -> bool {
+        if self.running_queries.is_pool_active(pool_key) {
+            return false;
+        }
+
         let stale = {
             let connections = self.connections.read().await;
             let Some(pool) = connections.get(pool_key) else {
@@ -1085,6 +1179,7 @@ impl AppState {
         }
 
         self.stop_keepalive_task(pool_key).await;
+        self.pool_activity.write().await.remove(pool_key);
         let removed = self.connections.write().await.remove(pool_key);
         if let Some(pool) = removed {
             close_pool_kind(pool).await;
@@ -1115,6 +1210,7 @@ impl AppState {
             self.reset_connection_transport(connection_id).await;
         } else {
             self.stop_keepalive_task(&pool_key).await;
+            self.pool_activity.write().await.remove(&pool_key);
             let removed = self.connections.write().await.remove(&pool_key);
             if let Some(pool) = removed {
                 close_pool_kind(pool).await;
@@ -1143,6 +1239,7 @@ impl AppState {
             return Ok(false);
         }
         self.stop_keepalive_task(&pool_key).await;
+        self.pool_activity.write().await.remove(&pool_key);
         let removed = self.connections.write().await.remove(&pool_key);
         if let Some(pool) = removed {
             close_pool_kind(pool).await;
@@ -1154,6 +1251,7 @@ impl AppState {
 
     pub async fn remove_pool_by_key(&self, pool_key: &str) -> bool {
         self.stop_keepalive_task(pool_key).await;
+        self.pool_activity.write().await.remove(pool_key);
         let removed = self.connections.write().await.remove(pool_key);
         if let Some(pool) = removed {
             close_pool_kind(pool).await;
@@ -1182,6 +1280,12 @@ impl AppState {
             .cloned()
             .collect();
         self.stop_keepalive_tasks(&keys_to_remove).await;
+        {
+            let mut activity = self.pool_activity.write().await;
+            for key in &keys_to_remove {
+                activity.remove(key);
+            }
+        }
         let mut conns = self.connections.write().await;
         let mut removed = Vec::with_capacity(keys_to_remove.len());
         for key in keys_to_remove {
@@ -1472,6 +1576,12 @@ impl AppState {
         // Remove dead pools
         if !dead_keys.is_empty() {
             self.stop_keepalive_tasks(&dead_keys).await;
+            {
+                let mut activity = self.pool_activity.write().await;
+                for key in &dead_keys {
+                    activity.remove(key);
+                }
+            }
             let mut conns = self.connections.write().await;
             for key in &dead_keys {
                 if let Some(pool) = conns.remove(key) {
@@ -1517,6 +1627,12 @@ impl AppState {
             .cloned()
             .collect();
         self.stop_keepalive_tasks(&keys_to_remove).await;
+        {
+            let mut activity = self.pool_activity.write().await;
+            for key in &keys_to_remove {
+                activity.remove(key);
+            }
+        }
         let mut conns = self.connections.write().await;
         let mut removed = Vec::with_capacity(keys_to_remove.len());
         for key in keys_to_remove {
@@ -1545,6 +1661,12 @@ impl AppState {
             })
             .collect();
         self.stop_keepalive_tasks(&keys_to_remove).await;
+        {
+            let mut activity = self.pool_activity.write().await;
+            for key in &keys_to_remove {
+                activity.remove(key);
+            }
+        }
         let mut conns = self.connections.write().await;
         let mut removed = Vec::with_capacity(keys_to_remove.len());
         for key in keys_to_remove {
@@ -1695,6 +1817,10 @@ fn session_scoped_pool_key(base_pool_key: String, client_session_id: Option<&str
     normalize_client_session_id(client_session_id)
         .map(|session| format!("{base_pool_key}:session:{session}"))
         .unwrap_or(base_pool_key)
+}
+
+fn is_session_scoped_pool_key(pool_key: &str) -> bool {
+    pool_key.contains(":session:")
 }
 
 pub(crate) fn config_for_pool_key<'a>(
@@ -2764,6 +2890,23 @@ mod tests {
     }
 
     #[test]
+    fn session_scoped_pool_keys_are_sanitized_and_detected() {
+        let key = super::session_scoped_pool_key_for(
+            Some(DatabaseType::Mysql),
+            "mysql-conn:analytics".to_string(),
+            Some("tab-1:count"),
+        );
+
+        assert_eq!(key, "mysql-conn:analytics:session:tab-1_count");
+        assert!(super::is_session_scoped_pool_key(&key));
+        assert!(!super::is_session_scoped_pool_key("mysql-conn:analytics"));
+        assert_eq!(
+            super::session_scoped_pool_key_for(Some(DatabaseType::DuckDb), "duckdb-conn".to_string(), Some("tab-1")),
+            "duckdb-conn"
+        );
+    }
+
+    #[test]
     fn mysql_direct_connections_skip_tcp_probe() {
         let mut config = mysql_config(Some("app"));
         config.host = "mysql.example.com".to_string();
@@ -2880,6 +3023,36 @@ mod tests {
         assert!(!conns.contains_key("conn:session:tab-1"));
         assert!(!conns.contains_key("conn:analytics:session:tab-1"));
         assert!(conns.contains_key("other"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn pool_activity_touch_updates_existing_pool_only() {
+        let (state, dir) = test_app_state().await;
+        let pool = crate::db::sqlite::connect_path(":memory:").await.unwrap();
+        let pool_key = "conn:session:tab-1";
+
+        state.connections.write().await.insert(pool_key.to_string(), PoolKind::Sqlite(pool));
+        state.pool_activity.write().await.insert(
+            pool_key.to_string(),
+            super::PoolActivity { last_used_at: std::time::Instant::now() - std::time::Duration::from_secs(10) },
+        );
+
+        {
+            let _touch = state.pool_activity_touch(pool_key);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let elapsed = state.pool_activity.read().await.get(pool_key).unwrap().last_used_at.elapsed();
+        assert!(elapsed < std::time::Duration::from_secs(10));
+
+        {
+            let _touch = state.pool_activity_touch(pool_key);
+            state.connections.write().await.remove(pool_key);
+            state.pool_activity.write().await.remove(pool_key);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert!(!state.pool_activity.read().await.contains_key(pool_key));
 
         let _ = std::fs::remove_dir_all(dir);
     }
