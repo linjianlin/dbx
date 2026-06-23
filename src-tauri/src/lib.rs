@@ -454,6 +454,7 @@ pub fn run() {
             commands::schema::list_objects,
             commands::schema::list_object_statistics,
             commands::schema::list_completion_objects,
+            commands::schema::completion_assistant_search,
             commands::schema::get_object_source,
             commands::schema::list_schemas,
             commands::schema::get_columns,

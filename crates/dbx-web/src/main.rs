@@ -204,6 +204,7 @@ async fn main() {
         .route("/schema/objects", get(routes::schema::list_objects))
         .route("/schema/object-statistics", get(routes::schema::list_object_statistics))
         .route("/schema/completion-objects", get(routes::schema::list_completion_objects))
+        .route("/schema/completion-assistant", post(routes::schema::completion_assistant_search))
         .route("/schema/object-source", get(routes::schema::get_object_source))
         .route("/schema/columns", get(routes::schema::list_columns))
         .route("/schema/indexes", get(routes::schema::list_indexes))

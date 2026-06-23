@@ -4,6 +4,8 @@ import type {
   LinkedServerInfo,
   TableInfo,
   ObjectInfo,
+  CompletionAssistantRequest,
+  CompletionAssistantResponse,
   ObjectStatistics,
   ObjectSource,
   ObjectSourceKind,
@@ -480,6 +482,10 @@ export async function listObjectStatistics(connectionId: string, database: strin
 
 export async function listCompletionObjects(connectionId: string, database: string, schema: string): Promise<ObjectInfo[]> {
   return get(`/api/schema/completion-objects?${qs({ connection_id: connectionId, database, schema })}`);
+}
+
+export async function completionAssistantSearch(request: CompletionAssistantRequest): Promise<CompletionAssistantResponse> {
+  return post("/api/schema/completion-assistant", request);
 }
 
 export async function getObjectSource(connectionId: string, database: string, schema: string, name: string, objectType: ObjectSourceKind): Promise<ObjectSource> {

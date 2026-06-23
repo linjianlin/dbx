@@ -118,6 +118,7 @@ export const getTableComment = forward("getTableComment");
 export const listObjects = forward("listObjects");
 export const listObjectStatistics = forward("listObjectStatistics");
 export const listCompletionObjects = forward("listCompletionObjects");
+export const completionAssistantSearch = forward("completionAssistantSearch");
 export const getObjectSource = forward("getObjectSource");
 export const getColumns = forward("getColumns");
 export const listIndexes = forward("listIndexes");
