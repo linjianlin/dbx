@@ -1044,6 +1044,10 @@ export async function revealPathInFileManager(path: string): Promise<void> {
   return invoke("reveal_path_in_file_manager", { path });
 }
 
+export async function isSqliteDatabaseFile(path: string): Promise<boolean> {
+  return invoke("is_sqlite_database_file", { path });
+}
+
 export async function backupSqliteDatabase(connectionId: string, destinationPath: string): Promise<void> {
   return invoke("backup_sqlite_database", { connectionId, destinationPath });
 }

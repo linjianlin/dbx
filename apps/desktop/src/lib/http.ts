@@ -403,6 +403,10 @@ export async function revealPathInFileManager(_path: string): Promise<void> {
   throw new Error("Reveal in file manager is only available in the desktop app.");
 }
 
+export async function isSqliteDatabaseFile(_path: string): Promise<boolean> {
+  return false;
+}
+
 export async function backupSqliteDatabase(_connectionId: string, _destinationPath: string): Promise<void> {
   throw new Error("SQLite backup is only available in the desktop app.");
 }
