@@ -392,6 +392,7 @@ const driverProfiles: Record<
   duckdb: { type: "duckdb", port: 0, user: "", label: "DuckDB", icon: "duckdb" },
   access: { type: "access", port: 0, user: "", label: "Microsoft Access", icon: "access" },
   mongodb: { type: "mongodb", port: 27017, user: "", label: "MongoDB", icon: "mongodb" },
+  "mongodb-legacy": { type: "mongodb", port: 27017, user: "", label: "MongoDB (Legacy)", icon: "mongodb" },
   clickhouse: {
     type: "clickhouse",
     port: 8123,
