@@ -1092,6 +1092,7 @@ fn sql_string_literal(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::db;
     use super::{
         clickhouse_metadata_database, deduplicate_column_infos, filter_mysql_system_databases_for_config,
         filter_table_infos, is_agent_postgres_metadata_fallback_config, normalize_information_schema_table_type,
