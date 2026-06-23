@@ -65,6 +65,45 @@ export interface SqlSnippet {
   body: string;
 }
 
+export type CompletionAssistantObjectKind = "database" | "schema" | "table" | "view" | "routine" | "procedure" | "function" | "column";
+
+export type CompletionAssistantCandidateKind = "database" | "schema" | "table" | "view" | "procedure" | "function" | "column" | "object";
+
+export type CompletionAssistantMatchMode = "prefix" | "contains";
+
+export interface CompletionAssistantRequest {
+  connection_id: string;
+  database: string;
+  schema?: string | null;
+  object_kinds?: CompletionAssistantObjectKind[];
+  mask?: string;
+  case_sensitive?: boolean;
+  global_search?: boolean;
+  max_results?: number | null;
+  search_in_comments?: boolean;
+  search_in_definitions?: boolean;
+  parent_schema?: string | null;
+  parent_name?: string | null;
+  match_mode?: CompletionAssistantMatchMode | null;
+}
+
+export interface CompletionAssistantCandidate {
+  name: string;
+  kind: CompletionAssistantCandidateKind;
+  database?: string | null;
+  schema?: string | null;
+  parent_schema?: string | null;
+  parent_name?: string | null;
+  comment?: string | null;
+  data_type?: string | null;
+}
+
+export interface CompletionAssistantResponse {
+  candidates: CompletionAssistantCandidate[];
+  incomplete: boolean;
+  fallback_used: boolean;
+}
+
 export interface ConnectionConfig {
   id: string;
   name: string;
