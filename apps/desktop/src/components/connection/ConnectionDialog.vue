@@ -36,7 +36,9 @@ import { prestoSqlBuiltinDriverPaths } from "@/lib/prestoSqlBuiltinDriver";
 import { SQLITE_DATABASE_FILE_EXTENSIONS } from "@/lib/databaseFileDetection";
 import { ArrowLeft, ArrowDown, ArrowUp, CheckSquare, ChevronRight, CircleHelp, Copy, ExternalLink, FilePlus2, FolderOpen, GripVertical, Grid3X3, KeyRound, Link2, List, ListFilter, Loader2, Pipette, Plus, Search, ShieldCheck, Square, Trash2 } from "@lucide/vue";
 import { buildDraftVisibleDatabasesConnectionId, connectionCanChooseVisibleDatabases, initialVisibleDatabaseSelection, visibleDatabaseSelectionIsStale } from "@/lib/connectionVisibleDatabases";
-import { canSaveVisibleDatabaseSelection, filterDatabaseNamesForConnection, isSystemDatabaseName, normalizeVisibleDatabaseSelection } from "@/lib/visibleDatabases";
+import { canSaveVisibleDatabaseSelection, filterDatabaseNamesForConnection, isSystemDatabaseName, normalizeVisibleDatabaseSelection, buildDraftVisibleSchemasConnectionId } from "@/lib/visibleDatabases";
+import { isSchemaAware } from "@/lib/databaseFeatureSupport";
+import VisibleSchemasDialog from "@/components/sidebar/VisibleSchemasDialog.vue";
 
 type DbOption = { value: string; label: string };
 type DbCategory = { key: string; title: string; options: DbOption[] };
@@ -106,6 +108,11 @@ const visibleDatabaseSelection = ref<Set<string>>(new Set());
 const visibleDatabaseSearchText = ref("");
 const visibleDatabaseError = ref("");
 const visibleDatabaseShowSystem = ref(false);
+const showVisibleSchemasDialog = ref(false);
+const isLoadingVisibleSchemas = ref(false);
+const visibleSchemaNames = ref<string[]>([]);
+const visibleSchemaInitialSelection = ref<string[]>([]);
+const visibleSchemaError = ref("");
 let testRunId = 0;
 
 const defaultForm = (): ConnectionForm => ({
@@ -980,6 +987,7 @@ function onDbTypeChange(val: string) {
   customDriverName.value = "";
   applyProfile(val, !!editingId.value);
   resetTestState();
+  resetVisibleSchemasState();
 }
 
 function switchH2ConnectionMode(mode: H2ConnectionMode) {
@@ -1296,6 +1304,18 @@ const visibleDatabaseHasSystemDatabases = computed(() => {
   const connection = connectionConfigSnapshotForVisibleDatabases();
   return visibleDatabaseNames.value.some((database) => isSystemDatabaseName(connection.db_type, database));
 });
+const canChooseVisibleSchemas = computed(() => isSchemaAware(form.value.db_type));
+const visibleSchemasDatabaseKey = computed(() => form.value.database || "");
+const hasVisibleSchemaFilter = computed(() => {
+  const key = visibleSchemasDatabaseKey.value;
+  return Array.isArray(form.value.visible_schemas?.[key]);
+});
+const visibleSchemaSummary = computed(() => {
+  const key = visibleSchemasDatabaseKey.value;
+  const configured = form.value.visible_schemas?.[key];
+  if (!configured?.length) return t("visibleSchemas.showAll");
+  return t("visibleSchemas.selectedCount", { selected: configured.length, total: visibleSchemaNames.value.length });
+});
 const testResultMessage = computed(() => {
   if (!testResult.value) return "";
   return testResult.value.ok ? t("connection.testSuccess") : testResult.value.message;
@@ -1607,6 +1627,7 @@ function connectionConfigForSubmit(id: string): ConnectionConfig {
   delete legacy.proxy_username;
   delete legacy.proxy_password;
   config.visible_databases = Array.isArray(config.visible_databases) && config.visible_databases.length > 0 ? config.visible_databases : undefined;
+  if (config.visible_schemas && Object.keys(config.visible_schemas).length === 0) config.visible_schemas = undefined;
   return config as ConnectionConfig;
 }
 
@@ -1929,6 +1950,57 @@ function saveVisibleDatabaseSelection() {
   showVisibleDatabasesDialog.value = false;
 }
 
+function resetVisibleSchemasState() {
+  showVisibleSchemasDialog.value = false;
+  isLoadingVisibleSchemas.value = false;
+  visibleSchemaNames.value = [];
+  visibleSchemaInitialSelection.value = [];
+  visibleSchemaError.value = "";
+}
+
+async function openVisibleSchemasPicker() {
+  if (!ensureConnectionHostResolvedFromUrl()) return;
+  if (!canChooseVisibleSchemas.value || isLoadingVisibleSchemas.value) return;
+  isLoadingVisibleSchemas.value = true;
+  visibleSchemaError.value = "";
+  const draftId = buildDraftVisibleSchemasConnectionId(uuid());
+  try {
+    const draftConfig: ConnectionConfig = {
+      ...connectionConfigForSubmit(draftId),
+      id: draftId,
+    };
+    await store.addEphemeralConnection(draftConfig);
+    await store.ensureConnected(draftId);
+    const names = await api.listSchemas(draftId, visibleSchemasDatabaseKey.value);
+    visibleSchemaNames.value = names;
+    const key = visibleSchemasDatabaseKey.value;
+    const configured = form.value.visible_schemas?.[key];
+    visibleSchemaInitialSelection.value = Array.isArray(configured) ? configured : [];
+    showVisibleSchemasDialog.value = true;
+  } catch (e: any) {
+    visibleSchemaNames.value = [];
+    visibleSchemaInitialSelection.value = [];
+    visibleSchemaError.value = String(e?.message || e);
+  } finally {
+    isLoadingVisibleSchemas.value = false;
+    store.removeConnection(draftId).catch(() => {});
+  }
+}
+
+function handleDraftSchemasSave(selectedNames: string[]) {
+  const key = visibleSchemasDatabaseKey.value;
+  form.value.visible_schemas = { ...(form.value.visible_schemas || {}), [key]: selectedNames };
+}
+
+function handleDraftSchemasShowAll() {
+  const key = visibleSchemasDatabaseKey.value;
+  if (form.value.visible_schemas) {
+    const next = { ...form.value.visible_schemas };
+    delete next[key];
+    form.value.visible_schemas = Object.keys(next).length > 0 ? next : undefined;
+  }
+}
+
 function applyConnectionUrl() {
   if (applyConnectionUrlToForm(connectionUrlInput.value)) {
     toast(t("connection.parseConnectionUrlApplied"), 2000);
@@ -1963,6 +2035,7 @@ function resetForm() {
   dbSearchQuery.value = "";
   configTab.value = "connection";
   resetVisibleDatabaseDraftState();
+  resetVisibleSchemasState();
   resetTestState();
 }
 
@@ -3896,6 +3969,11 @@ function openExternalUrl(url: string) {
             <ListFilter v-else class="mr-1.5 h-4 w-4" />
             {{ hasVisibleDatabaseFilter ? visibleDatabaseSummary : t("contextMenu.selectVisibleDatabases") }}
           </Button>
+          <Button v-if="canChooseVisibleSchemas" variant="outline" class="shrink-0" :disabled="isTesting || isSaving || isLoadingVisibleSchemas || !hasRequiredConnectionTarget" @click="openVisibleSchemasPicker">
+            <Loader2 v-if="isLoadingVisibleSchemas" class="mr-1.5 h-4 w-4 animate-spin" />
+            <ListFilter v-else class="mr-1.5 h-4 w-4" />
+            {{ hasVisibleSchemaFilter ? visibleSchemaSummary : t("visibleSchemas.showAll") }}
+          </Button>
           <Button variant="outline" class="shrink-0" :disabled="isTesting || isSaving" @click="testConnection">
             {{ isTesting ? t("connection.testing") : t("connection.test") }}
           </Button>
@@ -3985,4 +4063,18 @@ function openExternalUrl(url: string) {
       </DialogFooter>
     </DialogContent>
   </Dialog>
+
+  <VisibleSchemasDialog
+    v-model:open="showVisibleSchemasDialog"
+    draft-mode
+    :connection-id="''"
+    :connection-name="form.name || selectedProfile().label"
+    :database="visibleSchemasDatabaseKey"
+    :draft-schema-names="visibleSchemaNames"
+    :draft-initial-selection="visibleSchemaInitialSelection"
+    :draft-loading="isLoadingVisibleSchemas"
+    :draft-error="visibleSchemaError"
+    @draft:save="handleDraftSchemasSave"
+    @draft:show-all="handleDraftSchemasShowAll"
+  />
 </template>
