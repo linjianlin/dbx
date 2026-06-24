@@ -1432,6 +1432,7 @@ export default {
     loadedMembers: "{loaded} di {total} membri caricati",
     entries: "{count} voci",
     noExpiry: "nessuna scadenza",
+    ttlDay: "{count}g",
     columnType: "Tipo",
     columnKey: "Chiave",
     columnValue: "Valore",

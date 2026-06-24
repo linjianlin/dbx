@@ -1574,6 +1574,7 @@ export default {
     loadedMembers: "{loaded} of {total} members loaded",
     entries: "{count} entries",
     noExpiry: "no expiry",
+    ttlDay: "{count}d",
     columnType: "Type",
     columnKey: "Key",
     columnValue: "Value",

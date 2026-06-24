@@ -1443,6 +1443,7 @@ export default {
     loadedMembers: "{loaded} de {total} membros carregados",
     entries: "{count} entradas",
     noExpiry: "sem expiração",
+    ttlDay: "{count}d",
     columnType: "Tipo",
     columnKey: "Chave",
     columnValue: "Valor",

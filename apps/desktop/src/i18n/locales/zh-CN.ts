@@ -1573,6 +1573,7 @@ export default {
     loadedMembers: "已加载 {loaded} / 共 {total} 个成员",
     entries: "{count} 条记录",
     noExpiry: "永不过期",
+    ttlDay: "{count}天",
     columnType: "类型",
     columnKey: "键",
     columnValue: "值",
