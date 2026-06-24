@@ -201,6 +201,8 @@ let setSqlDiagnosticsEffect: import("@codemirror/state").StateEffectType<SqlSema
 let setPreviewRangeEffect: import("@codemirror/state").StateEffectType<{ from: number; to: number } | null> | null = null;
 let previewRangeComp: import("@codemirror/state").Compartment | null = null;
 let buildPreviewRangeExtension: (() => import("@codemirror/state").Extension) | null = null;
+let indentComp: import("@codemirror/state").Compartment | null = null;
+let codeMirrorIndentUnit: typeof import("@codemirror/language").indentUnit | null = null;
 let semanticDiagnostics: SqlSemanticDiagnostic[] = [];
 let semanticDiagnosticTimer: ReturnType<typeof setTimeout> | null = null;
 let semanticDiagnosticRunId = 0;
@@ -308,6 +310,13 @@ function onEditorGestureEnd(event: Event) {
   zoomCommitScheduler.flush(liveFontSize.value);
 }
 
+// Resolve the indent unit (one Tab worth) from the SQL formatter settings so
+// the Tab key, multi-line indent and auto-indent all honor the configured width.
+function editorIndentUnit(): string {
+  const { useTabs, tabWidth } = settingsStore.editorSettings.sqlFormatter;
+  return useTabs ? "\t" : " ".repeat(tabWidth);
+}
+
 function handleTab(view: EditorViewType): boolean {
   if (codeMirrorCompletionStatus?.(view.state) === "active") return false;
   const { state, dispatch } = view;
@@ -316,7 +325,7 @@ function handleTab(view: EditorViewType): boolean {
   const line = state.doc.lineAt(sel.from);
   const before = line.text.slice(0, sel.from - line.from);
   if (/^\s*$/.test(before)) return codeMirrorIndentMore?.(view) ?? false;
-  dispatch(state.update(state.replaceSelection("  "), { userEvent: "input.type" }));
+  dispatch(state.update(state.replaceSelection(editorIndentUnit()), { userEvent: "input.type" }));
   return true;
 }
 
@@ -579,6 +588,11 @@ function runKeymapExtension(codeMirrorKeymap: (typeof import("@codemirror/view")
 function wordWrapExtension() {
   if (!editorViewModule) return [];
   return props.forceWordWrap || settingsStore.editorSettings.wordWrap ? editorViewModule.EditorView.lineWrapping : [];
+}
+
+function indentExtension() {
+  if (!codeMirrorIndentUnit) return [];
+  return codeMirrorIndentUnit.of(editorIndentUnit());
 }
 
 function selectedSqlFromView(currentView: EditorViewType): string {
@@ -1780,7 +1794,7 @@ onMounted(async () => {
     langSql,
     { autocompletion, startCompletion, acceptCompletion, closeBrackets, closeBracketsKeymap, snippetCompletion, completionStatus, completionKeymap },
     { copyLineDown, copyLineUp, deleteLine, indentLess, indentMore, insertNewlineKeepIndent, moveLineDown, moveLineUp, redo, selectAll, undo, history, defaultKeymap, historyKeymap },
-    { bracketMatching, foldGutter, indentOnInput, syntaxHighlighting, defaultHighlightStyle, foldKeymap },
+    { bracketMatching, foldGutter, indentOnInput, indentUnit, syntaxHighlighting, defaultHighlightStyle, foldKeymap },
     { searchKeymap },
   ] = await Promise.all([import("@codemirror/view"), import("@codemirror/state"), import("@codemirror/lang-sql"), import("@codemirror/autocomplete"), import("@codemirror/commands"), import("@codemirror/language"), import("@codemirror/search")]);
   editorViewModule = { EditorView, keymap, rectangularSelection } as typeof import("@codemirror/view");
@@ -1794,6 +1808,7 @@ onMounted(async () => {
   completionComp = new Compartment();
   diagnosticComp = new Compartment();
   previewRangeComp = new Compartment();
+  indentComp = new Compartment();
   setSqlDiagnosticsEffect = StateEffect.define<SqlSemanticDiagnostic[]>();
   codeMirrorCompletionStatus = completionStatus;
   codeMirrorAcceptCompletion = acceptCompletion;
@@ -1809,6 +1824,7 @@ onMounted(async () => {
   codeMirrorRedo = redo;
   codeMirrorSelectAll = selectAll;
   codeMirrorInsertNewlineKeepIndent = insertNewlineKeepIndent;
+  codeMirrorIndentUnit = indentUnit;
   window.addEventListener("keyup", clearTableNavigationHoverOnModifierRelease);
   window.addEventListener("blur", clearTableNavigationHover);
 
@@ -1992,6 +2008,7 @@ onMounted(async () => {
       runKeymapComp.of(runKeymapExtension(keymap)),
       wordWrapComp.of(props.forceWordWrap || initialSettings.wordWrap ? EditorView.lineWrapping : []),
       readOnlyComp.of([EditorState.readOnly.of(!!props.readOnly), EditorView.editable.of(!props.readOnly)]),
+      indentComp.of(indentExtension()),
       rectangularSelection({ eventFilter: (e: MouseEvent) => e.altKey || e.button === 1 }),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
@@ -2297,6 +2314,14 @@ watch(
     });
   },
   { deep: true },
+);
+
+watch(
+  () => [settingsStore.editorSettings.sqlFormatter.tabWidth, settingsStore.editorSettings.sqlFormatter.useTabs],
+  () => {
+    if (!view.value || !indentComp) return;
+    view.value.dispatch({ effects: indentComp.reconfigure(indentExtension()) });
+  },
 );
 
 watch(
