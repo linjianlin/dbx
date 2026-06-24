@@ -637,7 +637,7 @@ impl AppState {
         let url = connection_url_for_endpoint(&db_config, &host, port);
         let connect_timeout = std::time::Duration::from_secs(db_config.effective_connect_timeout_secs());
         let idle_timeout = std::time::Duration::from_secs(db_config.idle_timeout_secs);
-        let mysql_pool_max_connections = if normalize_client_session_id(client_session_id).is_some() { 1 } else { 3 };
+        let mysql_pool_max_connections = mysql_pool_max_connections_for_session(client_session_id);
         let pool = match db_config.db_type {
             DatabaseType::Mysql => {
                 let (pool, mode) = connect_mysql_metadata_pool(
@@ -1934,6 +1934,14 @@ fn normalize_client_session_id(client_session_id: Option<&str>) -> Option<String
     client_session_id.map(str::trim).filter(|session| !session.is_empty()).map(|session| session.replace(':', "_"))
 }
 
+fn mysql_pool_max_connections_for_session(client_session_id: Option<&str>) -> usize {
+    if normalize_client_session_id(client_session_id).is_some() {
+        1
+    } else {
+        10
+    }
+}
+
 fn redis_cluster_transport_prefix(connection_id: &str) -> String {
     format!("{connection_id}:redis-cluster:")
 }
@@ -3114,6 +3122,13 @@ mod tests {
             super::session_scoped_pool_key_for(Some(DatabaseType::DuckDb), "duckdb-conn".to_string(), Some("tab-1")),
             "duckdb-conn"
         );
+    }
+
+    #[test]
+    fn mysql_pool_size_keeps_session_pools_single_connection() {
+        assert_eq!(super::mysql_pool_max_connections_for_session(None), 10);
+        assert_eq!(super::mysql_pool_max_connections_for_session(Some("")), 10);
+        assert_eq!(super::mysql_pool_max_connections_for_session(Some("tab-1")), 1);
     }
 
     #[test]
