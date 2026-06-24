@@ -10,6 +10,7 @@ import type { SidebarActivation } from "@/lib/treeNodeClick";
 import type { SqlSnippet } from "@/types/database";
 import { DEFAULT_SQL_SNIPPETS } from "@/lib/sqlCompletion";
 import { setDebugLoggingEnabled } from "@/lib/debugLog";
+import { DEFAULT_TABLE_COLUMN_TEMPLATE_FIELDS, normalizeTableColumnTemplateFields } from "@/lib/tableColumnTemplates";
 
 export type AiProvider = "claude" | "openai" | "gemini" | "deepseek" | "qwen" | "ollama" | "openai-compatible" | "codex-cli" | "custom";
 export type AiApiStyle = "completions" | "responses";
@@ -340,6 +341,7 @@ export interface EditorSettings {
   columnFormatters: Record<string, ColumnFormatterConfig>;
   customColumnFormatters: Record<string, CustomColumnFormatterConfig>;
   snippets: SqlSnippet[];
+  tableColumnTemplateFields: string[];
   exportBatchSize: number;
   exportRowLimitEnabled: boolean;
   exportRowLimit: number;
@@ -443,6 +445,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   columnFormatters: {},
   customColumnFormatters: {},
   snippets: DEFAULT_SQL_SNIPPETS,
+  tableColumnTemplateFields: [...DEFAULT_TABLE_COLUMN_TEMPLATE_FIELDS],
   exportBatchSize: 2000,
   exportRowLimitEnabled: true,
   exportRowLimit: 100000,
@@ -613,6 +616,7 @@ export function normalizeEditorSettings(settings: Partial<EditorSettings>, exist
     columnFormatters: normalizeColumnFormatters(settings.columnFormatters),
     customColumnFormatters: normalizeCustomColumnFormatters(settings.customColumnFormatters),
     snippets: normalizeSqlSnippets(settings.snippets, existing?.snippets),
+    tableColumnTemplateFields: normalizeTableColumnTemplateFields(settings.tableColumnTemplateFields),
     exportBatchSize: typeof settings.exportBatchSize === "number" && settings.exportBatchSize >= 100 && settings.exportBatchSize <= 100000 ? Math.round(settings.exportBatchSize) : DEFAULT_EDITOR_SETTINGS.exportBatchSize,
     exportRowLimitEnabled: typeof settings.exportRowLimitEnabled === "boolean" ? settings.exportRowLimitEnabled : DEFAULT_EDITOR_SETTINGS.exportRowLimitEnabled,
     exportRowLimit: typeof settings.exportRowLimit === "number" && settings.exportRowLimit >= 100 && settings.exportRowLimit <= 2147483647 ? Math.round(settings.exportRowLimit) : DEFAULT_EDITOR_SETTINGS.exportRowLimit,
@@ -784,6 +788,7 @@ export const useSettingsStore = defineStore("settings", () => {
     if (partial.columnFormatters !== undefined) editorSettings.value.columnFormatters = partial.columnFormatters;
     if (partial.customColumnFormatters !== undefined) editorSettings.value.customColumnFormatters = partial.customColumnFormatters;
     if (partial.snippets !== undefined) editorSettings.value.snippets = normalizeSqlSnippets(partial.snippets);
+    if (partial.tableColumnTemplateFields !== undefined) editorSettings.value.tableColumnTemplateFields = normalizeTableColumnTemplateFields(partial.tableColumnTemplateFields);
     if (partial.exportBatchSize !== undefined) editorSettings.value.exportBatchSize = Math.min(100000, Math.max(100, Math.round(partial.exportBatchSize)));
     if (partial.exportRowLimitEnabled !== undefined) editorSettings.value.exportRowLimitEnabled = partial.exportRowLimitEnabled;
     if (partial.exportRowLimit !== undefined) editorSettings.value.exportRowLimit = Math.min(2147483647, Math.max(100, Math.round(partial.exportRowLimit)));

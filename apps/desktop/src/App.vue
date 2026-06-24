@@ -111,6 +111,8 @@ const setupRequired = ref(false);
 const showConnectionDialog = ref(false);
 const connectionDialogPrefill = ref<ConnectionDeepLinkDraft | null>(null);
 const showSettingsDialog = ref(false);
+const settingsInitialTab = ref("editor");
+const settingsInitialSection = ref<string | undefined>(undefined);
 const showQueryEditorDdlDialog = ref(false);
 const showDriverStore = ref(false);
 const showQuickOpen = ref(false);
@@ -232,6 +234,12 @@ useVisibilityChange();
 const appVersion = ref("");
 const isClassicLayout = computed(() => settingsStore.editorSettings.appLayout === "classic");
 const updateNotificationsEnabled = computed(() => settingsStore.editorSettings.updateNotificationsEnabled);
+
+function openSettings(initialTab = "editor", initialSection?: string) {
+  settingsInitialTab.value = initialTab;
+  settingsInitialSection.value = initialSection;
+  showSettingsDialog.value = true;
+}
 const toolbarAgentDriverUpdateCount = computed(() => (updateNotificationsEnabled.value ? agentDriverUpdateCount.value : 0));
 const toolbarHasUpdateAvailable = computed(() => updateNotificationsEnabled.value && hasUpdateAvailable.value);
 const hasSqlFileConnections = computed(() => connectionStore.connections.some((c) => supportsSqlFileExecution(c.db_type)));
@@ -1140,7 +1148,7 @@ function handleKeydown(e: KeyboardEvent) {
   if (isOpenSettingsShortcut(e, shortcuts)) {
     e.preventDefault();
     e.stopPropagation();
-    showSettingsDialog.value = true;
+    openSettings();
     return;
   }
   if (isQuickOpenShortcut(e, shortcuts)) {
@@ -1427,7 +1435,7 @@ onUnmounted(() => {
           @toggle-history="showHistory = !showHistory"
           @toggle-sql-library="toggleSqlLibrary"
           @open-github="openGitHub"
-          @open-settings="showSettingsDialog = true"
+          @open-settings="openSettings()"
           @open-driver-store="showDriverStore = !showDriverStore"
           @check-updates="checkUpdates()"
           @open-transfer="dialogs.showTransferDialog.value = true"
@@ -1530,6 +1538,7 @@ onUnmounted(() => {
                         )
                     "
                     @structure-editor-close="activeTab && queryStore.closeTab(activeTab.id)"
+                    @open-settings="openSettings"
                   />
                 </KeepAlive>
               </div>
@@ -1576,6 +1585,8 @@ onUnmounted(() => {
           :show-connection-dialog="showConnectionDialog"
           :connection-prefill="connectionDialogPrefill"
           :show-settings-dialog="showSettingsDialog"
+          :settings-initial-tab="settingsInitialTab"
+          :settings-initial-section="settingsInitialSection"
           :app-version="appVersion"
           :show-danger-dialog="showDangerDialog"
           :danger-sql="dangerSql"

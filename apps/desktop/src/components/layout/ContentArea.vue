@@ -132,6 +132,7 @@ const emit = defineEmits<{
   objectSchemaChange: [schema: string | undefined];
   structureEditorSaved: [commentChanged: boolean];
   structureEditorClose: [];
+  openSettings: [initialTab?: string, initialSection?: string];
 }>();
 
 const { t } = useI18n();
@@ -1106,6 +1107,7 @@ defineExpose({ focusSearch, refreshData, handleModRTarget, requestQueryEditorExe
         :table-name="activeTab.structureTableName || ''"
         @saved="(commentChanged) => emit('structureEditorSaved', commentChanged)"
         @close="emit('structureEditorClose')"
+        @open-settings="(initialTab, initialSection) => emit('openSettings', initialTab, initialSection)"
       />
     </template>
 
