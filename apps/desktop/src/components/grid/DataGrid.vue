@@ -210,6 +210,7 @@ const props = defineProps<{
   cacheKey?: string;
   onExecuteSql?: (sql: string) => Promise<void>;
   fullExportResult?: (onProgress?: (info: { rowsExported: number; totalRows: number | null }) => void) => Promise<QueryResult | undefined>;
+  queryResultExportRequest?: (options: { exportId: string; filePath: string; format: "csv" | "xlsx" }) => Promise<api.QueryResultExportRequest | undefined>;
   allExportResults?: Array<{ sheetName: string; result: QueryResult }>;
   customSaveHandler?: import("@/composables/useDataGridEditor").CustomSaveHandler;
 }>();
@@ -4558,6 +4559,11 @@ const exportProgressState = ref({
   status: "",
   errorMessage: null as string | null,
 });
+const exportCancelHandler = ref<(() => Promise<void>) | null>(null);
+
+async function cancelActiveExport() {
+  await exportCancelHandler.value?.();
+}
 
 // --- Export composable ---
 const {
@@ -4615,9 +4621,11 @@ const {
   selectedRowIds,
   hasRowSelection,
   fullExportResult: props.fullExportResult,
+  queryResultExportRequest: props.queryResultExportRequest,
   allExportResults: computed(() => props.allExportResults),
   exportProgressDialog,
   exportProgressState,
+  exportCancelHandler,
 });
 
 const pageSizeMenuItems = computed(() =>
@@ -8430,7 +8438,7 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
     />
     <ImagePreviewDialog v-model:open="imagePreviewOpen" :src="imagePreviewSrc" :title="imagePreviewTitle" />
     <component v-if="previewDialogOpen && previewDialogConfig" :is="previewDialogConfig.component" v-model:open="previewDialogOpen" v-bind="previewDialogConfig.props" />
-    <ExportProgressDialog v-model:open="exportProgressDialog" v-bind="exportProgressState" disable-cancel />
+    <ExportProgressDialog v-model:open="exportProgressDialog" v-bind="exportProgressState" :disable-cancel="!exportCancelHandler" @cancel="cancelActiveExport" />
   </div>
 </template>
 
