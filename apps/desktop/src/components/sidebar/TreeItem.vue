@@ -888,6 +888,15 @@ async function openData() {
       if (existing) {
         existing.title = node.label;
         existing.schema = tableSchema;
+        // Reset per-table filter/sort state so the reused tab doesn't keep
+        // the previous table's WHERE/ORDER BY. DataGrid remounts (result is
+        // cleared below) and reinitializes its inputs from these props.
+        existing.whereInput = undefined;
+        existing.orderByInput = undefined;
+        existing.resultSortColumn = undefined;
+        existing.resultSortColumnIndex = undefined;
+        existing.resultSortDirection = undefined;
+        existing.resultSortedSql = undefined;
         queryStore.activeTabId = existing.id;
         return existing.id;
       }
