@@ -1831,14 +1831,31 @@ fn skip_mysql_quoted(sql: &str, start: usize, quote: u8) -> usize {
 /// Get a connection from the pool with a health check. If the connection is dead
 /// (e.g. after app was backgrounded), it tries again with a fresh connection.
 pub async fn get_conn_with_health_check(pool: &MySqlPool) -> Result<mysql_async::Conn, String> {
-    let mut conn = pool.get_conn().await.map_err(|e| e.to_string())?;
-    match tokio::time::timeout(crate::db::connection_timeout(), conn.ping()).await {
-        Ok(Ok(())) => Ok(conn),
+    let timeout = crate::db::connection_timeout();
+    let mut conn = get_conn_with_timeout(pool, timeout).await?;
+    match ping_conn_with_timeout(&mut conn, timeout).await {
+        Ok(()) => Ok(conn),
         _ => {
-            let _ = conn.disconnect().await;
-            pool.get_conn().await.map_err(|e| e.to_string())
+            let _ = tokio::time::timeout(timeout, conn.disconnect()).await;
+            let mut conn = get_conn_with_timeout(pool, timeout).await?;
+            ping_conn_with_timeout(&mut conn, timeout).await?;
+            Ok(conn)
         }
     }
+}
+
+async fn get_conn_with_timeout(pool: &MySqlPool, timeout: Duration) -> Result<mysql_async::Conn, String> {
+    tokio::time::timeout(timeout, pool.get_conn())
+        .await
+        .map_err(|_| "MySQL get connection timed out".to_string())?
+        .map_err(|e| e.to_string())
+}
+
+async fn ping_conn_with_timeout(conn: &mut mysql_async::Conn, timeout: Duration) -> Result<(), String> {
+    tokio::time::timeout(timeout, conn.ping())
+        .await
+        .map_err(|_| "MySQL ping timed out".to_string())?
+        .map_err(|e| e.to_string())
 }
 
 async fn execute_result_set_with_text_protocol_on_conn(

@@ -538,7 +538,19 @@ impl AppState {
                             }
                             break;
                         }
-                        Err(_) => log::warn!("Connection keepalive timed out for '{key}' after {}s", timeout.as_secs()),
+                        Err(_) => {
+                            log::warn!(
+                                "Connection keepalive timed out for '{key}' after {}s; invalidating pool",
+                                timeout.as_secs()
+                            );
+                            keepalive_tasks.write().await.remove(&key);
+                            pool_activity.write().await.remove(&key);
+                            let removed = connections.write().await.remove(&key);
+                            if let Some(pool) = removed {
+                                close_pool_kind_with_timeout(key, pool).await;
+                            }
+                            break;
+                        }
                     }
                 }
             }
