@@ -2139,9 +2139,9 @@ function validateTransportLayers(config: LegacyConnectionConfig) {
     }
     if (layer.type === "ssh") {
       if (!layer.user?.trim()) throw new Error(t("connection.sshHopInvalidUser", { hop: label }));
-      if (!layer.password?.trim() && !layer.key_path?.trim() && !layer.use_ssh_agent) {
-        throw new Error(t("connection.sshHopInvalidAuth", { hop: label }));
-      }
+      // Auth credentials are optional: the backend probes "none" authentication
+      // first, so hops that require no credential (e.g. passwordless SSH proxies)
+      // are valid with password, key, and agent all left empty.
       const timeout = Number(layer.connect_timeout_secs);
       if (!Number.isFinite(timeout) || timeout < 1 || timeout > 300) {
         throw new Error(t("connection.sshHopInvalidTimeout", { hop: label }));
