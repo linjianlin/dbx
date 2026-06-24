@@ -61,11 +61,7 @@ const activeConnectionValue = computed(() => props.activeConnection?.id || "");
 const activeSchemaValue = computed(() => props.activeTab.schema || "");
 const supportsExplain = computed(() => {
   const dbType = props.activeConnection?.db_type;
-<<<<<<< HEAD
-  return dbType !== "redis" && dbType !== "mongodb" && dbType !== "elasticsearch" && dbType !== "qdrant" && dbType !== "milvus" && dbType !== "etcd" && dbType !== "zookeeper" && dbType !== "mq" && dbType !== "nacos";
-=======
-  return dbType !== "redis" && dbType !== "mongodb" && dbType !== "elasticsearch" && dbType !== "qdrant" && dbType !== "milvus" && dbType !== "weaviate" && dbType !== "etcd" && dbType !== "mq" && dbType !== "nacos";
->>>>>>> origin/main
+  return dbType !== "redis" && dbType !== "mongodb" && dbType !== "elasticsearch" && dbType !== "qdrant" && dbType !== "milvus" && dbType !== "weaviate" && dbType !== "etcd" && dbType !== "zookeeper" && dbType !== "mq" && dbType !== "nacos";
 });
 const isSingleDb = computed(() => isSingleDatabase(props.activeConnection?.db_type));
 const hasDefaultDatabaseOption = computed(() => activeDatabaseOptions.value.includes(""));
@@ -255,11 +251,7 @@ function connectionById(connectionId: string): ConnectionConfig | undefined {
           </template>
         </SearchableSelect>
       </div>
-<<<<<<< HEAD
-      <div v-if="activeConnection?.db_type !== 'elasticsearch' && activeConnection?.db_type !== 'qdrant' && activeConnection?.db_type !== 'milvus' && activeConnection?.db_type !== 'zookeeper' && !isSingleDb" class="flex items-center gap-1">
-=======
-      <div v-if="activeConnection?.db_type !== 'elasticsearch' && activeConnection?.db_type !== 'qdrant' && activeConnection?.db_type !== 'milvus' && activeConnection?.db_type !== 'weaviate' && !isSingleDb" class="flex items-center gap-1">
->>>>>>> origin/main
+      <div v-if="activeConnection?.db_type !== 'elasticsearch' && activeConnection?.db_type !== 'qdrant' && activeConnection?.db_type !== 'milvus' && activeConnection?.db_type !== 'weaviate' && activeConnection?.db_type !== 'zookeeper' && !isSingleDb" class="flex items-center gap-1">
         <Database class="h-3.5 w-3.5 shrink-0" />
         <SearchableSelect
           :model-value="activeDatabaseValue"
