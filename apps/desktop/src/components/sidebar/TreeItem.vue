@@ -121,7 +121,9 @@ import { rankSavedSqlHistory, type SavedSqlHistoryScope } from "@/lib/savedSqlHi
 import { isSqlServerLinkedNode } from "@/lib/sqlServerLinkedServers";
 import DatabaseIcon from "@/components/icons/DatabaseIcon.vue";
 import ConnectionErrorIndicator from "@/components/connection/ConnectionErrorIndicator.vue";
+import { isSchemaAware } from "@/lib/databaseFeatureSupport";
 import VisibleDatabasesDialog from "@/components/sidebar/VisibleDatabasesDialog.vue";
+import SchemaFilterDialog from "@/components/sidebar/VisibleSchemasDialog.vue";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -153,6 +155,7 @@ type DuplicateStructureSource = TreeNode & { connectionId: string; database: str
 const DATA_TAB_METADATA_TTL_MS = 30_000;
 const { getDatabaseOptions } = useDatabaseOptions();
 const showVisibleDatabasesDialog = ref(false);
+const showVisibleSchemasDialog = ref(false);
 const { addTask: addExportTask } = useExportTracker();
 
 const props = defineProps<{
@@ -3065,11 +3068,25 @@ const nodeIconClass = computed(() => {
   if (props.node.type !== "database") return infoClass;
   return canCloseDatabaseConnection.value ? infoClass : "text-muted-foreground/65";
 });
+
 const canConfigureVisibleDatabases = computed(() => {
   if (props.node.type !== "connection" || !props.node.connectionId) return false;
   const dbType = connectionStore.getConfig(props.node.connectionId)?.db_type;
   return dbType !== "elasticsearch" && dbType !== "qdrant" && dbType !== "milvus" && dbType !== "weaviate" && dbType !== "etcd" && dbType !== "mq" && dbType !== "nacos";
 });
+
+const canConfigureVisibleSchemas = computed(() => {
+  if (props.node.type === "database" && props.node.connectionId && props.node.database != null) {
+    const dbType = connectionStore.getConfig(props.node.connectionId)?.db_type;
+    return isSchemaAware(dbType);
+  }
+  if (props.node.type === "connection" && props.node.connectionId) {
+    const dbType = connectionStore.getConfig(props.node.connectionId)?.db_type;
+    return isSchemaAware(dbType) && !usesTreeSchemaMode(dbType);
+  }
+  return false;
+});
+
 const canCopyFinalProxyPort = computed(() => {
   if (props.node.type !== "connection" || !props.node.connectionId) return false;
   return hasEnabledTransportLayers(connectionStore.getConfig(props.node.connectionId));
@@ -3105,6 +3122,10 @@ function togglePin() {
 
 function openVisibleDatabasesDialog() {
   showVisibleDatabasesDialog.value = true;
+}
+
+function openVisibleSchemasDialog() {
+  showVisibleSchemasDialog.value = true;
 }
 
 // --- Connection Group Management ---
@@ -3521,6 +3542,13 @@ function treeItemMenuItems(): ContextMenuItem[] {
         icon: ListFilter,
       });
     }
+    if (canConfigureVisibleSchemas.value) {
+      items.push({
+        label: t("visibleSchemas.title"),
+        action: openVisibleSchemasDialog,
+        icon: ListFilter,
+      });
+    }
     items.push({ label: t("contextMenu.editConnection"), action: editConnection, icon: Pencil });
     if (revealConnectionFilePath.value) {
       items.push({
@@ -3613,6 +3641,13 @@ function treeItemMenuItems(): ContextMenuItem[] {
       icon: RefreshCw,
       shortcut: shortcutRefresh,
     });
+    if (canConfigureVisibleSchemas.value) {
+      items.push({
+        label: t("visibleSchemas.title"),
+        action: openVisibleSchemasDialog,
+        icon: ListFilter,
+      });
+    }
     items.push({ label: "", separator: true });
     items.push({ label: t("transfer.dataTransfer"), action: openTransfer, icon: ArrowRightLeft });
     items.push({ label: t("diff.title"), action: openSchemaDiff, icon: ArrowRightLeft });
@@ -4021,7 +4056,12 @@ function treeItemMenuItems(): ContextMenuItem[] {
       </LightTooltip>
     </div>
   </CustomContextMenu>
+
   <VisibleDatabasesDialog v-if="node.type === 'connection' && node.connectionId" v-model:open="showVisibleDatabasesDialog" :connection-id="node.connectionId" :connection-name="node.label" />
+
+  <SchemaFilterDialog v-if="node.type === 'database' && node.connectionId && node.database != null" v-model:open="showVisibleSchemasDialog" :connection-id="node.connectionId" :connection-name="node.label" :database="node.database ?? ''" />
+
+  <SchemaFilterDialog v-else-if="node.type === 'connection' && node.connectionId && canConfigureVisibleSchemas" v-model:open="showVisibleSchemasDialog" :connection-id="node.connectionId" :connection-name="node.label" :database="connectionStore.getConfig(node.connectionId)?.database || ''" />
 
   <Dialog v-model:open="showDeleteConfirm">
     <DialogContent class="sm:max-w-[400px]">

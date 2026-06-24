@@ -108,7 +108,7 @@ pub async fn disconnect_db(
     #[cfg(feature = "mq-admin")]
     app.mq_registry.drop_connection(&body.connection_id).await;
     app.reset_connection_transport(&body.connection_id).await;
-    if body.connection_id.starts_with("__visible_draft_") {
+    if body.connection_id.starts_with("__visible_draft_") || body.connection_id.starts_with("__visible_schema_draft_") {
         app.configs.write().await.remove(&body.connection_id);
     }
 
@@ -206,7 +206,7 @@ async fn sync_connection_configs(state: &WebState, configs: &[ConnectionConfig])
 }
 
 fn is_transient_runtime_config_id(id: &str) -> bool {
-    id.starts_with("__test_") || id.starts_with("__visible_draft_")
+    id.starts_with("__test_") || id.starts_with("__visible_draft_") || id.starts_with("__visible_schema_draft_")
 }
 
 async fn drop_nacos_adapters_for_connection_ids(state: &WebState, connection_ids: &[String]) {
@@ -263,6 +263,7 @@ mod tests {
             password: String::new(),
             database: None,
             visible_databases: None,
+            visible_schemas: None,
             attached_databases: Vec::new(),
             color: None,
             transport_layers: Vec::new(),

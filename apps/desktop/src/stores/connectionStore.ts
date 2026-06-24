@@ -28,7 +28,7 @@ import { buildSqlServerDatabaseTreeNodes, SQLSERVER_DEFAULT_SCHEMA } from "@/lib
 import { findDatabaseTreeNode } from "@/lib/treeRefreshTarget";
 import { shouldMarkDisconnected } from "@/lib/connectionHealth";
 import { connectionAttemptOriginalErrorMessage, connectionAttemptTimeoutMessage, connectionAttemptTimeoutMs } from "@/lib/connectionAttemptTimeout";
-import { filterDatabaseNamesForConnection, filterVisibleDatabaseNames, normalizeVisibleDatabaseSelection } from "@/lib/visibleDatabases";
+import { filterDatabaseNamesForConnection, filterSchemaNamesForConnection, filterVisibleDatabaseNames, normalizeVisibleDatabaseSelection } from "@/lib/visibleDatabases";
 import {
   buildObjectGroupPlaceholderNodes,
   buildGroupedObjectTreeNodes,
@@ -941,6 +941,61 @@ export const useConnectionStore = defineStore("connection", () => {
     rebuildTreeNodes();
   }
 
+  async function setVisibleSchemas(connectionId: string, database: string, schemaNames: string[]) {
+    const config = getConfig(connectionId);
+    if (!config) return;
+    const key = database || "";
+    await updateVisibleSchemasConfig(connectionId, key, schemaNames);
+    await reloadSchemaChildren(connectionId, database);
+  }
+
+  async function clearVisibleSchemas(connectionId: string, database: string) {
+    const config = getConfig(connectionId);
+    if (!config || !config.visible_schemas) return;
+    const key = database || "";
+    await updateVisibleSchemasConfig(connectionId, key, undefined);
+    await reloadSchemaChildren(connectionId, database);
+  }
+
+  async function updateVisibleSchemasConfig(connectionId: string, database: string, schemaNames: string[] | undefined) {
+    const idx = connections.value.findIndex((connection) => connection.id === connectionId);
+    if (idx < 0) return;
+    const existing = connections.value[idx].visible_schemas;
+    let nextSchemas: Record<string, string[]> | undefined;
+    if (schemaNames) {
+      nextSchemas = { ...(existing || {}), [database]: schemaNames };
+    } else if (existing) {
+      nextSchemas = { ...existing };
+      delete nextSchemas[database];
+      if (Object.keys(nextSchemas).length === 0) nextSchemas = undefined;
+    }
+    const nextConnections = [...connections.value];
+    nextConnections[idx] = {
+      ...nextConnections[idx],
+      visible_schemas: nextSchemas,
+    };
+    await persistConnections(nextConnections);
+    connections.value = nextConnections;
+    rebuildTreeNodes();
+  }
+
+  async function reloadSchemaChildren(connectionId: string, database?: string) {
+    const config = getConfig(connectionId);
+    if (!config) return;
+    const db = database || config.database || "";
+    clearLoadedChildrenCache(connectionId);
+    clearLoadedChildrenCache(`${connectionId}:${db}`);
+    await loadDatabases(connectionId, { force: true });
+    // After saving schema filter, force-refresh database node's schema children
+    // to avoid stale children from previously expanded nodes
+    if (db) {
+      const dbNode = findNode(treeNodes.value, `${connectionId}:${db}`);
+      if (dbNode) {
+        await loadTreeNodeChildren(dbNode, { force: true });
+      }
+    }
+  }
+
   async function reloadConnectionDatabaseChildren(connectionId: string) {
     const config = getConfig(connectionId);
     if (!config) return;
@@ -1139,7 +1194,7 @@ export const useConnectionStore = defineStore("connection", () => {
           }
         }
         const schemas = await withMetadataLoadTimeout(connectionId, api.listSchemas(connectionId, effectiveDb), "schemas");
-        const visibleSchemas = filterDatabaseNamesForConnection(schemas, config);
+        const visibleSchemas = filterSchemaNamesForConnection(schemas, config, effectiveDb || "");
         const schemaNodes: TreeNode[] = sortSidebarNames(visibleSchemas).map((s) => ({
           id: `${connectionId}:${s}:${s}`,
           label: s,
@@ -1560,20 +1615,29 @@ export const useConnectionStore = defineStore("connection", () => {
       }
 
       const schemas = sortSidebarSchemaInfos(await api.listSchemaInfos(connectionId, database));
-      const children = schemas.map((schema) => {
-        const s = schema.name;
-        return {
-          id: `${connectionId}:${database}:${s}`,
-          label: s,
-          type: "schema" as const,
-          connectionId,
+      const visibleSchemaNames = new Set(
+        filterSchemaNamesForConnection(
+          schemas.map((schema) => schema.name),
+          getConfig(connectionId),
           database,
-          schema: s,
-          comment: schema.comment,
-          isExpanded: false,
-          children: [],
-        };
-      });
+        ),
+      );
+      const children = schemas
+        .filter((schema) => visibleSchemaNames.has(schema.name))
+        .map((schema) => {
+          const s = schema.name;
+          return {
+            id: `${connectionId}:${database}:${s}`,
+            label: s,
+            type: "schema" as const,
+            connectionId,
+            database,
+            schema: s,
+            comment: schema.comment,
+            isExpanded: false,
+            children: [],
+          };
+        });
       setChildren(node, children);
       await savePersistedTreeChildren(cacheKey, children);
       node.isExpanded = true;
@@ -1604,7 +1668,7 @@ export const useConnectionStore = defineStore("connection", () => {
       }
 
       const config = getConfig(connectionId);
-      const schemas = await api.listSchemas(connectionId, database);
+      const schemas = filterSchemaNamesForConnection(await api.listSchemas(connectionId, database), config, database);
       const defaultSchemaObjects = simpleObjectDisplay ? await api.listObjects(connectionId, database, SQLSERVER_DEFAULT_SCHEMA) : [];
       const children = buildSqlServerDatabaseTreeNodes(connectionId, database, schemas, defaultSchemaObjects, {
         lazyObjectTypes: simpleObjectDisplay ? undefined : supportedSidebarObjectTypes(config),
@@ -3412,6 +3476,8 @@ export const useConnectionStore = defineStore("connection", () => {
     isDefaultDatabase,
     setVisibleDatabases,
     clearVisibleDatabases,
+    setVisibleSchemas,
+    clearVisibleSchemas,
     removeConnection,
     removeConnections,
     editingConnectionId,

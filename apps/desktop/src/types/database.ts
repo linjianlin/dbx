@@ -120,6 +120,7 @@ export interface ConnectionConfig {
   password: string;
   database?: string;
   visible_databases?: string[];
+  visible_schemas?: Record<string, string[]>;
   attached_databases?: AttachedDatabaseConfig[];
   color?: string;
   transport_layers?: TransportLayerConfig[];
