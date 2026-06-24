@@ -696,6 +696,36 @@ pub async fn get_table_comment_core(
         {
             let connections = state.connections.read().await;
             try_sqlserver!(connections, &pool_key, get_table_comment, schema, table);
+            if let Some(client) = extract_pool!(&connections, &pool_key, Agent) {
+                if db_config.as_ref().is_some_and(|config| {
+                    matches!(config.db_type, DatabaseType::Oracle | DatabaseType::OceanbaseOracle)
+                }) {
+                    let sql = oracle_table_comment_sql(schema, table);
+                    let timeout = agent_metadata_timeout(db_config.as_ref());
+                    drop(connections);
+                    let mut client = client.lock().await;
+                    let result = client
+                        .execute_query_with_timeout::<db::QueryResult>(
+                            agent_execute_query_params(
+                                &sql,
+                                Some(database),
+                                Some(schema),
+                                QueryExecutionOptions {
+                                    max_rows: Some(1),
+                                    fetch_size: None,
+                                    page_size: None,
+                                    result_session_id: None,
+                                    client_session_id: None,
+                                    timeout_secs: None,
+                                    execution_id: None,
+                                },
+                            ),
+                            timeout,
+                        )
+                        .await?;
+                    return oracle_table_comment_from_query_result(result);
+                }
+            }
         }
 
         let connections = state.connections.read().await;
@@ -716,6 +746,22 @@ pub async fn get_table_comment_core(
         }
     })
     .await
+}
+
+fn oracle_table_comment_sql(schema: &str, table: &str) -> String {
+    format!(
+        "SELECT COMMENTS FROM ALL_TAB_COMMENTS WHERE OWNER = {} AND TABLE_NAME = {} AND TABLE_TYPE IN ('TABLE', 'VIEW')",
+        sql_string(schema),
+        sql_string(table),
+    )
+}
+
+fn oracle_table_comment_from_query_result(result: db::QueryResult) -> Result<Option<String>, String> {
+    Ok(result
+        .rows
+        .first()
+        .and_then(|row| row.iter().find_map(|value| value.as_str().map(str::to_string)))
+        .filter(|value| !value.trim().is_empty()))
 }
 
 async fn list_tables_once(
@@ -1096,7 +1142,8 @@ mod tests {
     use super::{
         clickhouse_metadata_database, deduplicate_column_infos, filter_mysql_system_databases_for_config,
         filter_table_infos, is_agent_postgres_metadata_fallback_config, normalize_information_schema_table_type,
-        presto_like_information_schema_tables_sql, presto_like_tables_from_query_result,
+        oracle_table_comment_from_query_result, oracle_table_comment_sql, presto_like_information_schema_tables_sql,
+        presto_like_tables_from_query_result,
     };
     #[cfg(feature = "duckdb-bundled")]
     use super::{
@@ -1456,6 +1503,48 @@ mod tests {
 
         config.query_timeout_secs = 0;
         assert_eq!(super::agent_metadata_timeout(Some(&config)), None);
+    }
+
+    #[test]
+    fn oracle_table_comment_sql_targets_single_table_and_escapes_literals() {
+        let sql = oracle_table_comment_sql("APP'S", "USER'S");
+
+        assert!(sql.contains("ALL_TAB_COMMENTS"));
+        assert!(sql.contains("OWNER = 'APP''S'"));
+        assert!(sql.contains("TABLE_NAME = 'USER''S'"));
+        assert!(sql.contains("TABLE_TYPE IN ('TABLE', 'VIEW')"));
+        assert!(!sql.contains("ALL_OBJECTS"));
+    }
+
+    #[test]
+    fn oracle_table_comment_from_query_result_returns_optional_non_blank_comment() {
+        let result = db::QueryResult {
+            columns: vec!["COMMENTS".to_string()],
+            column_types: Vec::new(),
+            column_sortables: Vec::new(),
+            rows: vec![vec![serde_json::json!("Customer table")]],
+            affected_rows: 0,
+            execution_time_ms: 0,
+            truncated: false,
+            session_id: None,
+            has_more: false,
+        };
+
+        assert_eq!(oracle_table_comment_from_query_result(result).unwrap().as_deref(), Some("Customer table"));
+
+        let empty = db::QueryResult {
+            columns: vec!["COMMENTS".to_string()],
+            column_types: Vec::new(),
+            column_sortables: Vec::new(),
+            rows: vec![vec![serde_json::json!("  ")]],
+            affected_rows: 0,
+            execution_time_ms: 0,
+            truncated: false,
+            session_id: None,
+            has_more: false,
+        };
+
+        assert_eq!(oracle_table_comment_from_query_result(empty).unwrap(), None);
     }
 }
 
