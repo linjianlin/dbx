@@ -954,8 +954,12 @@ async fn list_tables_once(
                 .map(|tables| filter_table_infos(tables, filter, limit, offset, object_types))
         }
         PoolKind::Mysql(p, mode) => {
-            dispatch_mysql!(p, mode, db::mysql::list_tables, db::ob_oracle::list_tables, schema)
-                .map(|tables| filter_table_infos(tables, filter, limit, offset, object_types))
+            let tables = if *mode == MysqlMode::OceanBaseOracle {
+                db::ob_oracle::list_tables(p, schema).await
+            } else {
+                db::mysql::list_tables(p, mysql_table_metadata_catalog(database, schema)).await
+            }?;
+            Ok(filter_table_infos(tables, filter, limit, offset, object_types))
         }
         PoolKind::Postgres(p) if db_config.as_ref().is_some_and(is_questdb_config) => {
             db::questdb::list_tables(p, schema)
@@ -1156,6 +1160,10 @@ fn normalize_information_schema_table_type(table_type: &str) -> String {
     }
 }
 
+fn mysql_table_metadata_catalog<'a>(database: &'a str, _schema: &str) -> &'a str {
+    database
+}
+
 fn quote_presto_like_identifier(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
 }
@@ -1169,9 +1177,9 @@ mod tests {
     use super::db;
     use super::{
         clickhouse_metadata_database, deduplicate_column_infos, filter_mysql_system_databases_for_config,
-        filter_table_infos, is_agent_postgres_metadata_fallback_config, normalize_information_schema_table_type,
-        oracle_table_comment_from_query_result, oracle_table_comment_sql, presto_like_information_schema_tables_sql,
-        presto_like_tables_from_query_result,
+        filter_table_infos, is_agent_postgres_metadata_fallback_config, mysql_table_metadata_catalog,
+        normalize_information_schema_table_type, oracle_table_comment_from_query_result, oracle_table_comment_sql,
+        presto_like_information_schema_tables_sql, presto_like_tables_from_query_result,
     };
     #[cfg(feature = "duckdb-bundled")]
     use super::{
@@ -1241,6 +1249,12 @@ mod tests {
             one_time: false,
             read_only: false,
         }
+    }
+
+    #[test]
+    fn mysql_table_child_metadata_uses_database_not_schema() {
+        assert_eq!(mysql_table_metadata_catalog("app_db", ""), "app_db");
+        assert_eq!(mysql_table_metadata_catalog("app_db", "public"), "app_db");
     }
 
     fn test_table_info(name: &str) -> super::db::TableInfo {
@@ -2414,7 +2428,11 @@ pub async fn list_indexes_core(
                 if db_config.as_ref().is_some_and(is_manticoresearch_config) {
                     return db::manticoresearch::list_indexes(p, table).await;
                 }
-                dispatch_mysql!(p, mode, db::mysql::list_indexes, db::ob_oracle::list_indexes, schema, table)
+                if *mode == MysqlMode::OceanBaseOracle {
+                    db::ob_oracle::list_indexes(p, schema, table).await
+                } else {
+                    db::mysql::list_indexes(p, mysql_table_metadata_catalog(database, schema), table).await
+                }
             }
             PoolKind::Postgres(p) if db_config.as_ref().is_some_and(is_questdb_config) => {
                 db::questdb::list_indexes(p, schema, table).await
@@ -2460,7 +2478,11 @@ pub async fn list_foreign_keys_core(
 
         match pool {
             PoolKind::Mysql(p, mode) => {
-                dispatch_mysql!(p, mode, db::mysql::list_foreign_keys, db::ob_oracle::list_foreign_keys, schema, table)
+                if *mode == MysqlMode::OceanBaseOracle {
+                    db::ob_oracle::list_foreign_keys(p, schema, table).await
+                } else {
+                    db::mysql::list_foreign_keys(p, mysql_table_metadata_catalog(database, schema), table).await
+                }
             }
             PoolKind::Postgres(p) => db::postgres::list_foreign_keys(p, schema, table).await,
             PoolKind::Sqlite(p) => db::sqlite::list_foreign_keys(p, schema, table).await,
@@ -2500,7 +2522,11 @@ pub async fn list_triggers_core(
 
         match pool {
             PoolKind::Mysql(p, mode) => {
-                dispatch_mysql!(p, mode, db::mysql::list_triggers, db::ob_oracle::list_triggers, schema, table)
+                if *mode == MysqlMode::OceanBaseOracle {
+                    db::ob_oracle::list_triggers(p, schema, table).await
+                } else {
+                    db::mysql::list_triggers(p, mysql_table_metadata_catalog(database, schema), table).await
+                }
             }
             PoolKind::Postgres(p) => db::postgres::list_triggers(p, schema, table).await,
             PoolKind::Sqlite(p) => db::sqlite::list_triggers(p, schema, table).await,
