@@ -718,7 +718,7 @@ function isNacosAdminEndpointNotFound(message: string): boolean {
   return /Nacos admin endpoint was not found/i.test(message);
 }
 
-async function tryNacosDockerConsoleFallback(config: ConnectionConfig, originalError: string): Promise<string | null> {
+async function tryNacosDockerConsoleFallback(config: ConnectionConfig, originalError: string, runId: number): Promise<string | null> {
   if (config.db_type !== "nacos" || !isNacosAdminEndpointNotFound(originalError)) return null;
   const fallbackUrl = dockerNacosConsoleFallbackUrl(nacosServerAddr.value);
   if (!fallbackUrl || fallbackUrl === nacosServerAddr.value.trim()) return null;
@@ -727,7 +727,7 @@ async function tryNacosDockerConsoleFallback(config: ConnectionConfig, originalE
   nacosServerAddr.value = fallbackUrl;
   try {
     const fallbackConfig = connectionConfigForSubmit(config.id);
-    const message = await testConnectionWithTimeout(fallbackConfig);
+    const message = await testConnectionWithTimeout(fallbackConfig, runId);
     return `${message} ${t("connection.nacosConsoleUrlAutoAdjusted", { from: previousUrl.trim(), to: fallbackUrl })}`;
   } catch {
     nacosServerAddr.value = previousUrl;
@@ -740,7 +740,7 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
-async function testConnectionWithTimeout(config: ConnectionConfig): Promise<string> {
+async function testConnectionWithTimeout(config: ConnectionConfig, runId: number): Promise<string> {
   const timeoutMs = connectionAttemptTimeoutMs(config);
   const timeoutMessage = connectionAttemptTimeoutMessage(timeoutMs);
   const promise = api.testConnection(config);
@@ -748,6 +748,7 @@ async function testConnectionWithTimeout(config: ConnectionConfig): Promise<stri
   let timer: ReturnType<typeof setTimeout> | undefined;
   void promise.catch((error) => {
     if (!timedOut) return;
+    if (runId !== testRunId) return;
     testResult.value = {
       ok: false,
       message: connectionAttemptOriginalErrorMessage(timeoutMessage, errorMessage(error)),
@@ -1433,7 +1434,7 @@ async function testConnection() {
   testResult.value = null;
   const config = connectionConfigForSubmit(editingId.value || uuid());
   try {
-    const msg = await testConnectionWithTimeout(config);
+    const msg = await testConnectionWithTimeout(config, runId);
     if (runId !== testRunId) return;
     if (config.db_type === "mongodb" && /legacy driver/i.test(msg)) {
       mongoDriverMode.value = "legacy";
@@ -1442,7 +1443,7 @@ async function testConnection() {
   } catch (e: any) {
     if (runId !== testRunId) return;
     const message = mongodbAuthFailureHint(String(e));
-    const fallbackMessage = await tryNacosDockerConsoleFallback(config, message);
+    const fallbackMessage = await tryNacosDockerConsoleFallback(config, message, runId);
     if (runId !== testRunId) return;
     testResult.value = fallbackMessage ? { ok: true, message: fallbackMessage } : { ok: false, message };
   } finally {
