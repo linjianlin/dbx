@@ -119,6 +119,7 @@ import { isEnumColumn, enumValuesForColumn } from "@/lib/dataGridEnumEditor";
 import { isCancelSearchShortcut, isCopyCurrentRowShortcut, isDeleteCurrentRowShortcut, isFocusSearchShortcut, isModRShortcut, isToggleTransposeShortcut } from "@/lib/keyboardShortcuts";
 import { dataGridHeaderContentWidth, scrollbarGutterWidth } from "@/lib/dataGridScrollGutter";
 import { canGoNextDataGridPage } from "@/lib/dataGridPagination";
+import { dataGridScrollPosition, isDataGridNearScrollBottom, shouldCheckInfiniteScrollAfterScroll, type DataGridScrollPosition } from "@/lib/dataGridInfiniteScroll";
 import { CANVAS_DATA_GRID_ROW_HEIGHT, drawCanvasDataGrid } from "@/lib/canvasDataGridRenderer";
 import { dataGridSaveActionMode, dataGridSaveToolbarState } from "@/lib/dataGridSaveUi";
 import { EDITOR_FONT_FAMILY_CSS_VAR } from "@/lib/editorThemes";
@@ -2058,6 +2059,7 @@ function refreshGridScrollerMetrics() {
   if (!scrollerEl) return;
   updateGridScrollbarGutter(scrollerEl);
   updateGridHorizontalViewport(scrollerEl);
+  rememberInfiniteScrollPosition(scrollerEl);
   if (headerRef.value) {
     headerRef.value.scrollLeft = scrollerEl.scrollLeft;
   }
@@ -2288,6 +2290,7 @@ function columnContentOffsetLeft(visibleColIdx: number): number {
 
 let scrollingTimer = 0;
 const isScrolling = ref(false);
+let infiniteScrollPositions = new WeakMap<HTMLElement, DataGridScrollPosition>();
 
 function markGridScrolling() {
   if (!isScrolling.value) isScrolling.value = true;
@@ -2297,12 +2300,25 @@ function markGridScrolling() {
   }, 120);
 }
 
+function rememberInfiniteScrollPosition(scroller: HTMLElement) {
+  infiniteScrollPositions.set(scroller, dataGridScrollPosition(scroller.scrollTop, scroller.scrollLeft));
+}
+
+function maybeCheckInfiniteScroll(scroller: HTMLElement) {
+  const current = dataGridScrollPosition(scroller.scrollTop, scroller.scrollLeft);
+  const previous = infiniteScrollPositions.get(scroller);
+  infiniteScrollPositions.set(scroller, current);
+  if (shouldCheckInfiniteScrollAfterScroll(previous, current)) {
+    checkInfiniteScroll(scroller);
+  }
+}
+
 function onScrollerScroll(e: Event) {
   syncHeaderScroll(e);
   const target = e.target;
   if (target instanceof HTMLElement) {
     recordScrollPosition({ top: target.scrollTop, left: target.scrollLeft });
-    checkInfiniteScroll(target);
+    maybeCheckInfiniteScroll(target);
   }
   markGridScrolling();
 }
@@ -2569,11 +2585,8 @@ function checkInfiniteScroll(scroller: HTMLElement) {
   infiniteScrollCheckScheduled = true;
   requestAnimationFrame(() => {
     infiniteScrollCheckScheduled = false;
-    const { scrollTop, scrollHeight, clientHeight } = scroller;
-    const threshold = 100;
-    const distanceToBottom = scrollHeight - scrollTop - clientHeight;
     // Only trigger when near bottom AND page has changed since last trigger
-    if (distanceToBottom < threshold && currentPage.value !== lastInfiniteScrollPage) {
+    if (isDataGridNearScrollBottom(scroller) && currentPage.value !== lastInfiniteScrollPage) {
       lastInfiniteScrollPage = currentPage.value;
       infiniteScrollNextPage();
     }
@@ -2587,6 +2600,7 @@ function changePageSize(size: number) {
   currentPage.value = 1;
   lastInfiniteScrollPage = 0;
   infiniteScrollAllLoaded = false;
+  infiniteScrollPositions = new WeakMap();
   resetGridVerticalScroll(true);
   emit("paginate", 0, normalizedSize, currentWhereInput(), currentOrderBy());
 }
@@ -2895,6 +2909,7 @@ function resetInfiniteScrollState() {
   infiniteScrollAllLoaded = false;
   isInfiniteScrollPaginating.value = false;
   infiniteScrollLoading.value = false;
+  infiniteScrollPositions = new WeakMap();
   resetGridVerticalScroll(true);
 }
 
@@ -4193,7 +4208,7 @@ function onCanvasScroll(event: Event) {
   recordScrollPosition({ top: scrollTop, left: scrollLeft });
   markGridScrolling();
   scheduleCanvasDraw();
-  checkInfiniteScroll(scroller);
+  maybeCheckInfiniteScroll(scroller);
 }
 
 function canvasWheelDeltaToPixels(delta: number, deltaMode: number, pageSize: number): number {
