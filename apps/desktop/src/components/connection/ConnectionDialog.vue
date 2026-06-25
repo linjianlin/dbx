@@ -40,6 +40,7 @@ import { buildDraftVisibleDatabasesConnectionId, connectionCanChooseVisibleDatab
 import { canSaveVisibleDatabaseSelection, filterDatabaseNamesForConnection, isSystemDatabaseName, normalizeVisibleDatabaseSelection, buildDraftVisibleSchemasConnectionId, normalizeVisibleSchemaSelection } from "@/lib/visibleDatabases";
 import { isSchemaAware } from "@/lib/databaseFeatureSupport";
 import VisibleSchemasDialog from "@/components/sidebar/VisibleSchemasDialog.vue";
+import { oceanbaseModeConnectionPatch, oceanbaseSubModeFromConfig } from "@/lib/oceanbaseConnectionMode";
 
 type DbOption = { value: string; label: string };
 type DbCategory = { key: string; title: string; options: DbOption[] };
@@ -885,13 +886,15 @@ watch(
     if (config) {
       const legacyConfig = config as LegacyConnectionConfig;
       const profile = profileForConfig(config);
+      const oceanbaseMode = profile === "oceanbase" ? oceanbaseSubModeFromConfig(config) : "mysql";
+      const oceanbasePatch = profile === "oceanbase" ? oceanbaseModeConnectionPatch(oceanbaseMode) : null;
       editingId.value = config.id;
       const profileConfig = driverProfiles[profile];
       form.value = {
         name: config.name,
-        db_type: profileConfig?.type || config.db_type,
-        driver_profile: profile,
-        driver_label: config.driver_label || driverProfiles[profile]?.label || config.db_type,
+        db_type: oceanbasePatch?.db_type || profileConfig?.type || config.db_type,
+        driver_profile: oceanbasePatch?.driver_profile || profile,
+        driver_label: config.driver_label || oceanbasePatch?.driver_label || driverProfiles[profile]?.label || config.db_type,
         url_params: config.url_params || "",
         host: config.db_type === "h2" ? config.host || h2FilePathFromJdbcUrl(config.connection_string) : config.host,
         port: profile === "tdengine" && (config.port === 0 || config.port === 6030) ? 6041 : config.port,
@@ -941,7 +944,7 @@ watch(
       selectedTransportLayerId.value = form.value.transport_layers?.[0]?.id || null;
       selectedType.value = profile;
       if (profile === "oceanbase") {
-        oceanbaseSubMode.value = config.driver_profile === "oceanbase-oracle" ? "oracle" : "mysql";
+        oceanbaseSubMode.value = oceanbaseMode;
       }
       if (profile === "gbase8a" || profile === "gbase8s") {
         selectedType.value = "gbase";
@@ -1489,6 +1492,9 @@ function generateConnectionName(): string {
 
 function connectionConfigForSubmit(id: string): ConnectionConfig {
   const config = { ...form.value, id } as LegacyConnectionConfig;
+  if (selectedType.value === "oceanbase") {
+    Object.assign(config, oceanbaseModeConnectionPatch(oceanbaseSubMode.value));
+  }
   if (!config.name?.trim()) {
     config.name = generateConnectionName();
   }
