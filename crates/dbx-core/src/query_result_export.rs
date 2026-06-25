@@ -1,13 +1,16 @@
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufWriter, Write};
+use std::time::Duration;
 
-use crate::connection::AppState;
+use crate::connection::{AppState, PoolKind};
 use crate::csv_export::{format_query_result_csv, format_query_result_csv_rows};
 use crate::database_export::is_export_cancelled;
 pub use crate::database_export::ExportStatus;
 use crate::models::connection::DatabaseType;
-use crate::query::{close_query_session, execute_sql_statement_with_options, QueryExecutionOptions, QUERY_CANCELED};
+use crate::query::{
+    canceled_error, close_query_session, execute_sql_statement_with_options, QueryExecutionOptions, QUERY_CANCELED,
+};
 use crate::query_result_sql::{
     build_query_pagination_execution_plan, QueryPagination, QueryPaginationExecutionPlanOptions,
 };
@@ -87,6 +90,14 @@ fn effective_row_limit(format: &str, request: &QueryResultExportRequest) -> Opti
 
 fn xlsx_hard_limit_active(format: &str, request: &QueryResultExportRequest) -> bool {
     format == "xlsx" && request.row_limit.map_or(true, |limit| limit > XLSX_MAX_DATA_ROWS)
+}
+
+fn query_export_timeout(timeout_secs: Option<u64>) -> Option<Duration> {
+    match timeout_secs {
+        Some(0) => None,
+        Some(seconds) => Some(Duration::from_secs(seconds)),
+        None => Some(Duration::from_secs(30)),
+    }
 }
 
 fn should_fetch_next_page(
@@ -290,6 +301,10 @@ async fn export_query_result_core_inner(
     .max(1);
 
     on_progress(progress(request, 0, ExportStatus::Running, None));
+
+    if try_export_sqlserver_query_result_stream(state, request, &format, cancel_token.clone(), on_progress).await? {
+        return Ok(());
+    }
 
     let mut csv_file = if format == "csv" {
         Some(BufWriter::new(File::create(&request.file_path).map_err(|e| format!("Failed to create file: {e}"))?))
@@ -524,6 +539,124 @@ async fn export_query_result_core_inner(
 
     on_progress(progress(request, rows_exported, ExportStatus::Done, None));
     Ok(())
+}
+
+async fn try_export_sqlserver_query_result_stream(
+    state: &AppState,
+    request: &QueryResultExportRequest,
+    format: &str,
+    cancel_token: Option<CancellationToken>,
+    on_progress: &impl Fn(TableExportProgress),
+) -> Result<bool, String> {
+    if request.database_type != DatabaseType::SqlServer || request.use_agent_cursor {
+        return Ok(false);
+    }
+
+    let pool_key = state.get_or_create_pool(&request.connection_id, Some(&request.database)).await?;
+    let connections = state.connections.read().await;
+    let Some(client) = connections.get(&pool_key).and_then(|pool| match pool {
+        PoolKind::SqlServer(client) => Some(client.clone()),
+        _ => None,
+    }) else {
+        return Ok(false);
+    };
+    drop(connections);
+
+    if let Some(execution_id) = request.execution_id.as_deref() {
+        state.running_queries.set_pool_key(execution_id, pool_key);
+    }
+
+    let xlsx_hard_limit_active = xlsx_hard_limit_active(format, request);
+    let row_limit = effective_row_limit(format, request);
+    let stream_row_limit =
+        if xlsx_hard_limit_active { row_limit.map(|limit| limit.saturating_add(1)) } else { row_limit };
+    let mut columns: Vec<String> = Vec::new();
+    let mut rows_exported = 0_u64;
+    let mut csv_file = if format == "csv" {
+        let mut file =
+            BufWriter::new(File::create(&request.file_path).map_err(|e| format!("Failed to create file: {e}"))?);
+        file.write_all(b"\xEF\xBB\xBF").map_err(|e| format!("Failed to write BOM: {e}"))?;
+        Some(file)
+    } else {
+        None
+    };
+    let mut xlsx = None;
+
+    let mut client = match cancel_token.as_ref() {
+        Some(token) => {
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => return Err(canceled_error()),
+                guard = client.lock() => guard,
+            }
+        }
+        None => client.lock().await,
+    };
+
+    let stream_future = crate::db::sqlserver::stream_first_result_set(
+        &mut client,
+        &request.sql,
+        stream_row_limit,
+        cancel_token.clone(),
+        |item| {
+            match item {
+                crate::db::sqlserver::SqlServerStreamItem::Columns(stream_columns) => {
+                    columns = stream_columns.to_vec();
+                    if let Some(file) = csv_file.as_mut() {
+                        let csv = format_query_result_csv(&columns, &[]);
+                        let header = csv.strip_suffix('\n').unwrap_or(&csv);
+                        file.write_all(header.as_bytes()).map_err(|e| format!("Failed to write CSV: {e}"))?;
+                    } else {
+                        let xlsx_file =
+                            File::create(&request.file_path).map_err(|e| format!("Failed to create XLSX file: {e}"))?;
+                        xlsx =
+                            Some(start_streaming_xlsx_workbook(BufWriter::new(xlsx_file), Some("Result"), &columns)?);
+                    }
+                }
+                crate::db::sqlserver::SqlServerStreamItem::Row(row) => {
+                    if xlsx_hard_limit_active && rows_exported as usize >= XLSX_MAX_DATA_ROWS {
+                        return Err(XLSX_ROW_LIMIT_ERROR.to_string());
+                    }
+                    if let Some(file) = csv_file.as_mut() {
+                        let rows_csv = format_query_result_csv_rows(&[row.to_vec()]);
+                        write!(file, "\n{rows_csv}").map_err(|e| format!("Failed to write CSV rows: {e}"))?;
+                    } else if let Some(writer) = xlsx.as_mut() {
+                        writer.write_row(row).map_err(|e| format!("Failed to write XLSX row: {e}"))?;
+                    } else {
+                        let xlsx_file =
+                            File::create(&request.file_path).map_err(|e| format!("Failed to create XLSX file: {e}"))?;
+                        xlsx =
+                            Some(start_streaming_xlsx_workbook(BufWriter::new(xlsx_file), Some("Result"), &columns)?);
+                        if let Some(writer) = xlsx.as_mut() {
+                            writer.write_row(row).map_err(|e| format!("Failed to write XLSX row: {e}"))?;
+                        }
+                    }
+                    rows_exported += 1;
+                    on_progress(progress(request, rows_exported, ExportStatus::Running, None));
+                }
+            }
+            Ok(())
+        },
+    );
+    match query_export_timeout(request.timeout_secs) {
+        Some(timeout) => tokio::time::timeout(timeout, stream_future)
+            .await
+            .map_err(|_| format!("Query timed out after {} seconds", timeout.as_secs()))??,
+        None => stream_future.await?,
+    };
+    drop(client);
+
+    on_progress(progress(request, rows_exported, ExportStatus::Writing, None));
+    if let Some(file) = csv_file.as_mut() {
+        file.flush().map_err(|e| format!("Failed to flush CSV file: {e}"))?;
+    }
+    if let Some(writer) = xlsx {
+        let mut buf =
+            finish_streaming_xlsx_workbook(writer).map_err(|e| format!("Failed to finalize XLSX file: {e}"))?;
+        buf.flush().map_err(|e| format!("Failed to flush XLSX file: {e}"))?;
+    }
+    on_progress(progress(request, rows_exported, ExportStatus::Done, None));
+    Ok(true)
 }
 
 #[cfg(test)]

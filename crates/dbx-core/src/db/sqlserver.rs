@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use tiberius::{AuthMethod, Client, ColumnData, Config, FromSql, QueryItem, QueryStream, SqlBrowser};
 use tokio::net::TcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
+use tokio_util::sync::CancellationToken;
 
 pub type SqlServerClient = Client<Compat<TcpStream>>;
 pub const SQLSERVER_DRIVER_PANIC_ERROR_PREFIX: &str = "SQL Server driver panic:";
@@ -160,6 +161,16 @@ struct SqlServerResultSet {
     column_types: Vec<String>,
     rows: Vec<Vec<serde_json::Value>>,
     truncated: bool,
+}
+
+pub struct SqlServerStreamExportSummary {
+    pub columns: Vec<String>,
+    pub rows_exported: u64,
+}
+
+pub enum SqlServerStreamItem<'a> {
+    Columns(&'a [String]),
+    Row(&'a [serde_json::Value]),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -511,6 +522,75 @@ async fn collect_result_sets_limited(
 
     push_sqlserver_result_set(&mut results, current, start);
     Ok(results)
+}
+
+pub async fn stream_first_result_set(
+    client: &mut SqlServerClient,
+    sql: &str,
+    row_limit: Option<usize>,
+    cancel_token: Option<CancellationToken>,
+    mut on_item: impl for<'a> FnMut(SqlServerStreamItem<'a>) -> Result<(), String>,
+) -> Result<SqlServerStreamExportSummary, String> {
+    let query_sql = match spatial_safe_sqlserver_query(client, sql).await {
+        Ok(Some(sql)) => sql,
+        Ok(None) | Err(_) => sql.to_string(),
+    };
+    let mut stream = sqlserver_driver_result(client.query(query_sql.as_str(), &[])).await?;
+    let mut active_result_index: Option<usize> = None;
+    let mut columns: Vec<String> = Vec::new();
+    let mut columns_emitted = false;
+    let mut rows_exported = 0_u64;
+
+    loop {
+        if cancel_token.as_ref().is_some_and(|token| token.is_cancelled()) {
+            return Err(crate::query::canceled_error());
+        }
+        let item = match cancel_token.as_ref() {
+            Some(token) => {
+                tokio::select! {
+                    biased;
+                    _ = token.cancelled() => return Err(crate::query::canceled_error()),
+                    item = stream.try_next() => item.map_err(|e| e.to_string())?,
+                }
+            }
+            None => stream.try_next().await.map_err(|e| e.to_string())?,
+        };
+        let Some(item) = item else {
+            break;
+        };
+        match item {
+            QueryItem::Metadata(metadata) => {
+                if active_result_index.is_none() {
+                    active_result_index = Some(metadata.result_index());
+                    columns = columns_from_metadata(&metadata);
+                    on_item(SqlServerStreamItem::Columns(&columns))?;
+                    columns_emitted = true;
+                }
+            }
+            QueryItem::Row(row) => {
+                if active_result_index.is_none() {
+                    active_result_index = Some(row.result_index());
+                    columns = row.columns().iter().map(|c| c.name().to_string()).collect();
+                    on_item(SqlServerStreamItem::Columns(&columns))?;
+                    columns_emitted = true;
+                }
+                if Some(row.result_index()) != active_result_index {
+                    continue;
+                }
+                if row_limit.is_some_and(|limit| rows_exported as usize >= limit) {
+                    break;
+                }
+                let values = row_to_json(&row);
+                on_item(SqlServerStreamItem::Row(&values))?;
+                rows_exported += 1;
+            }
+        }
+    }
+
+    if !columns_emitted {
+        on_item(SqlServerStreamItem::Columns(&columns))?;
+    }
+    Ok(SqlServerStreamExportSummary { columns, rows_exported })
 }
 
 fn sqlserver_cell_to_json(cell: &ColumnData<'static>) -> serde_json::Value {
