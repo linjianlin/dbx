@@ -54,7 +54,7 @@ const repoRoot = run("git", ["rev-parse", "--show-toplevel"]).stdout.trim();
 process.chdir(repoRoot);
 
 if (!skipFetch) {
-  run("git", ["fetch", "--tags", "--quiet", "origin"]);
+  fetchReleaseTags();
 }
 
 if (!target) {
@@ -342,6 +342,17 @@ function tagExists(tag) {
 function ensureGhReady(workflow) {
   run("gh", ["auth", "status", "--hostname", "github.com"], { stdio: "inherit" });
   run("gh", ["workflow", "view", workflow, "--repo", REPO], { stdio: "inherit" });
+}
+
+function fetchReleaseTags() {
+  run("git", [
+    "fetch",
+    "--quiet",
+    "origin",
+    "+refs/tags/v*:refs/tags/v*",
+    "+refs/tags/packages-v*:refs/tags/packages-v*",
+    "+refs/tags/agents-v*:refs/tags/agents-v*",
+  ]);
 }
 
 function run(command, commandArgs, options = {}) {
