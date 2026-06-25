@@ -714,6 +714,9 @@ async fn list_schemas_once(
     let pool = connections.get(&pool_key).ok_or("Pool not found")?;
 
     match pool {
+        PoolKind::Mysql(p, mode) if *mode == MysqlMode::OceanBaseOracle => db::ob_oracle::list_schemas(p)
+            .await
+            .map(|schemas| filter_visible_schema_names(schemas, visible_schema_filter.as_deref())),
         PoolKind::Postgres(p) => db::postgres::list_schemas(p)
             .await
             .map(|schemas| filter_visible_schema_names(schemas, visible_schema_filter.as_deref())),

@@ -22,6 +22,7 @@ pub(in crate::schema) async fn list_databases(
 
 pub(in crate::schema) async fn list_schemas(pool: &PoolKind) -> Result<Vec<String>, String> {
     match pool {
+        PoolKind::Mysql(p, mode) if *mode == MysqlMode::OceanBaseOracle => db::ob_oracle::list_schemas(p).await,
         PoolKind::Postgres(p) => db::postgres::list_schemas(p).await,
         _ => Ok(vec![]),
     }

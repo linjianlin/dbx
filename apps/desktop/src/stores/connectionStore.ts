@@ -28,7 +28,7 @@ import { buildSqlServerDatabaseTreeNodes } from "@/lib/sqlServerTree";
 import { findDatabaseTreeNode } from "@/lib/treeRefreshTarget";
 import { shouldMarkDisconnected } from "@/lib/connectionHealth";
 import { connectionAttemptOriginalErrorMessage, connectionAttemptTimeoutMessage, connectionAttemptTimeoutMs } from "@/lib/connectionAttemptTimeout";
-import { filterDatabaseNamesForConnection, filterSchemaNamesForConnection, filterVisibleDatabaseNames, normalizeVisibleDatabaseSelection } from "@/lib/visibleDatabases";
+import { connectionUsesVisibleSchemaFilter, filterDatabaseNamesForConnection, filterSchemaNamesForConnection, filterVisibleDatabaseNames, normalizeVisibleDatabaseSelection } from "@/lib/visibleDatabases";
 import {
   buildObjectGroupPlaceholderNodes,
   buildGroupedObjectTreeNodes,
@@ -1235,8 +1235,9 @@ export const useConnectionStore = defineStore("connection", () => {
         const children = withSavedSqlRoot(connectionId, buildDuckDbConnectionTreeNodes(connectionId, databases, schemas), node);
         setChildren(node, children);
         await savePersistedTreeChildren(cacheKey, children);
-      } else if (config?.db_type === "dameng" || config?.db_type === "oracle") {
-        const effectiveDb = config.database || "";
+      } else if (config && connectionUsesVisibleSchemaFilter(config)) {
+        const schemaFilterConfig = config;
+        const effectiveDb = schemaFilterConfig.database || "";
         const cacheKey = schemaCacheKey(connectionId, effectiveDb, "schemas");
         if (!options?.force) {
           const cached = await loadPersistedTreeChildren(node, cacheKey);
@@ -1246,7 +1247,7 @@ export const useConnectionStore = defineStore("connection", () => {
           }
         }
         const schemas = await withMetadataLoadTimeout(connectionId, api.listSchemas(connectionId, effectiveDb, true), "schemas");
-        const visibleSchemas = filterSchemaNamesForConnection(schemas, config, effectiveDb || "");
+        const visibleSchemas = filterSchemaNamesForConnection(schemas, schemaFilterConfig, effectiveDb || "");
         const schemaNodes: TreeNode[] = sortSidebarNames(visibleSchemas).map((s) => ({
           id: `${connectionId}:${s}:${s}`,
           label: s,

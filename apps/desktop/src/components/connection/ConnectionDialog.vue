@@ -37,7 +37,7 @@ import { SQLITE_DATABASE_FILE_EXTENSIONS } from "@/lib/databaseFileDetection";
 import { connectionAttemptOriginalErrorMessage, connectionAttemptTimeoutMessage, connectionAttemptTimeoutMs } from "@/lib/connectionAttemptTimeout";
 import { ArrowLeft, ArrowDown, ArrowUp, CheckSquare, ChevronRight, CircleHelp, Copy, ExternalLink, FilePlus2, FolderOpen, GripVertical, Grid3X3, KeyRound, Link2, List, ListFilter, Loader2, Pipette, Plus, Search, ShieldCheck, Square, Trash2 } from "@lucide/vue";
 import { buildDraftVisibleDatabasesConnectionId, connectionCanChooseVisibleDatabases, initialVisibleDatabaseSelection, visibleDatabaseSelectionIsStale } from "@/lib/connectionVisibleDatabases";
-import { canSaveVisibleDatabaseSelection, filterDatabaseNamesForConnection, isSystemDatabaseName, normalizeVisibleDatabaseSelection, buildDraftVisibleSchemasConnectionId, normalizeVisibleSchemaSelection } from "@/lib/visibleDatabases";
+import { canSaveVisibleDatabaseSelection, connectionUsesVisibleSchemaFilter, filterDatabaseNamesForConnection, isSystemDatabaseName, normalizeVisibleDatabaseSelection, buildDraftVisibleSchemasConnectionId, normalizeVisibleSchemaSelection } from "@/lib/visibleDatabases";
 import { isSchemaAware } from "@/lib/databaseFeatureSupport";
 import VisibleSchemasDialog from "@/components/sidebar/VisibleSchemasDialog.vue";
 import { oceanbaseModeConnectionPatch, oceanbaseSubModeFromConfig } from "@/lib/oceanbaseConnectionMode";
@@ -1323,7 +1323,7 @@ const canUseTransportLayers = computed(() => form.value.db_type !== "sqlite" && 
 const shouldShowAgentDriverInstallHint = computed(() => showAgentDriverInstallHint(form.value.db_type, agentDrivers.value, form.value.driver_profile));
 const h2DriverMissing = computed(() => form.value.db_type === "h2" && isH2FileMode.value && agentDrivers.value.find((d) => d.db_type === "h2")?.installed !== true);
 const canChooseVisibleDatabases = computed(() => connectionCanChooseVisibleDatabases(form.value));
-const visibleFilterUsesSchemas = computed(() => form.value.db_type === "oracle" || form.value.db_type === "dameng");
+const visibleFilterUsesSchemas = computed(() => connectionUsesVisibleSchemaFilter(form.value));
 const hasVisibleDatabaseFilter = computed(() => Array.isArray(form.value.visible_databases));
 const visibleDatabaseSummary = computed(() => {
   const configured = form.value.visible_databases;
@@ -1694,7 +1694,7 @@ function connectionConfigForSubmit(id: string): ConnectionConfig {
   delete legacy.proxy_port;
   delete legacy.proxy_username;
   delete legacy.proxy_password;
-  if (config.db_type === "oracle" || config.db_type === "dameng") {
+  if (connectionUsesVisibleSchemaFilter(config)) {
     config.visible_databases = undefined;
   } else {
     config.visible_databases = Array.isArray(config.visible_databases) && config.visible_databases.length > 0 ? config.visible_databases : undefined;
@@ -1983,7 +1983,7 @@ async function openVisibleDatabasesPicker() {
 }
 
 async function loadVisibleDatabaseNames(connectionId: string, config: ConnectionConfig): Promise<string[]> {
-  if (config.db_type === "oracle" || config.db_type === "dameng") {
+  if (connectionUsesVisibleSchemaFilter(config)) {
     return api.listSchemas(connectionId, config.database || "");
   }
   if (config.db_type === "redis") {
