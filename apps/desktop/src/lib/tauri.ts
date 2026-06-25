@@ -1749,6 +1749,7 @@ export interface TableExportRequest {
   orderBy?: string;
   skipCount?: boolean;
   batchSize?: number;
+  rowLimit?: number | null;
 }
 
 export interface TableCsvExportOptions {

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::connection::{AppState, PoolKind};
 use crate::csv_export::{format_query_result_csv, format_query_result_csv_rows};
@@ -28,6 +28,7 @@ pub const XLSX_MAX_DATA_ROWS: usize = 1_048_575;
 const XLSX_ROW_LIMIT_ERROR: &str = "XLSX 最多支持 1,048,575 行数据，请改用 CSV 导出完整结果。";
 const STREAMING_PAGINATION_UNSUPPORTED_ERROR: &str = "当前查询暂不支持流式导出，请简化查询或使用受支持的驱动。";
 const AGENT_SESSION_MISSING_ERROR: &str = "查询结果流式导出需要驱动返回结果集会话，但当前驱动未返回 session_id。";
+const STREAM_PROGRESS_TIME_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,6 +91,17 @@ fn effective_row_limit(format: &str, request: &QueryResultExportRequest) -> Opti
 
 fn xlsx_hard_limit_active(format: &str, request: &QueryResultExportRequest) -> bool {
     format == "xlsx" && request.row_limit.map_or(true, |limit| limit > XLSX_MAX_DATA_ROWS)
+}
+
+fn should_emit_stream_progress(
+    rows_exported: u64,
+    last_progress_rows: u64,
+    row_interval: u64,
+    elapsed_since_last_progress: Duration,
+) -> bool {
+    rows_exported > last_progress_rows
+        && (rows_exported.saturating_sub(last_progress_rows) >= row_interval.max(1)
+            || elapsed_since_last_progress >= STREAM_PROGRESS_TIME_INTERVAL)
 }
 
 fn query_export_timeout(timeout_secs: Option<u64>) -> Option<Duration> {
@@ -572,6 +584,9 @@ async fn try_export_sqlserver_query_result_stream(
         if xlsx_hard_limit_active { row_limit.map(|limit| limit.saturating_add(1)) } else { row_limit };
     let mut columns: Vec<String> = Vec::new();
     let mut rows_exported = 0_u64;
+    let mut last_progress_rows = 0_u64;
+    let mut last_progress_at = Instant::now();
+    let progress_row_interval = request.page_size.max(1) as u64;
     let mut csv_file = if format == "csv" {
         let mut file =
             BufWriter::new(File::create(&request.file_path).map_err(|e| format!("Failed to create file: {e}"))?);
@@ -632,7 +647,17 @@ async fn try_export_sqlserver_query_result_stream(
                         }
                     }
                     rows_exported += 1;
-                    on_progress(progress(request, rows_exported, ExportStatus::Running, None));
+                    let now = Instant::now();
+                    if should_emit_stream_progress(
+                        rows_exported,
+                        last_progress_rows,
+                        progress_row_interval,
+                        now.duration_since(last_progress_at),
+                    ) {
+                        on_progress(progress(request, rows_exported, ExportStatus::Running, None));
+                        last_progress_rows = rows_exported;
+                        last_progress_at = now;
+                    }
                 }
             }
             Ok(())
@@ -646,6 +671,9 @@ async fn try_export_sqlserver_query_result_stream(
     };
     drop(client);
 
+    if rows_exported != last_progress_rows {
+        on_progress(progress(request, rows_exported, ExportStatus::Running, None));
+    }
     on_progress(progress(request, rows_exported, ExportStatus::Writing, None));
     if let Some(file) = csv_file.as_mut() {
         file.flush().map_err(|e| format!("Failed to flush CSV file: {e}"))?;
@@ -708,6 +736,14 @@ mod tests {
         let req = request("xlsx", None, Some(XLSX_MAX_DATA_ROWS as u64 + 1));
         assert!(xlsx_hard_limit_active("xlsx", &req));
         assert!(req.total_rows.is_some_and(|total| total > XLSX_MAX_DATA_ROWS as u64));
+    }
+
+    #[test]
+    fn sqlserver_stream_progress_is_throttled() {
+        assert!(!should_emit_stream_progress(19_999, 0, 20_000, Duration::from_millis(100)));
+        assert!(should_emit_stream_progress(20_000, 0, 20_000, Duration::from_millis(100)));
+        assert!(should_emit_stream_progress(10, 0, 20_000, STREAM_PROGRESS_TIME_INTERVAL));
+        assert!(!should_emit_stream_progress(20_000, 20_000, 20_000, STREAM_PROGRESS_TIME_INTERVAL));
     }
 
     #[test]

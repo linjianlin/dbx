@@ -39,6 +39,8 @@ pub struct TableExportRequest {
     pub skip_count: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch_size: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row_limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -147,6 +149,14 @@ fn table_page_sql(
     }
 }
 
+fn next_export_batch_size(row_limit: Option<usize>, rows_exported: u64, batch_size: usize) -> Option<usize> {
+    let remaining = row_limit.map(|limit| limit.saturating_sub(rows_exported as usize));
+    if matches!(remaining, Some(0)) {
+        return None;
+    }
+    Some(remaining.map_or(batch_size, |value| value.min(batch_size)).max(1))
+}
+
 pub async fn export_table_data_core(
     state: &AppState,
     request: &TableExportRequest,
@@ -208,6 +218,7 @@ pub async fn export_table_data_core(
     // 6. Get total row count for progress estimation when requested. Data
     // grid exports skip this by default because COUNT can be the slowest query
     // on large HANA/JDBC tables, especially with filters.
+    let row_limit = request.row_limit;
     let total_rows = if request.skip_count {
         None
     } else {
@@ -218,11 +229,16 @@ pub async fn export_table_data_core(
             request.where_input.as_deref(),
         );
         match execute_on_pool(state, &pool_key, &count_query).await {
-            Ok(result) => result.rows.first().and_then(|r| r.first()).and_then(|v| match v {
-                Value::Number(n) => n.as_u64(),
-                Value::String(s) => s.parse::<u64>().ok(),
-                _ => None,
-            }),
+            Ok(result) => result
+                .rows
+                .first()
+                .and_then(|r| r.first())
+                .and_then(|v| match v {
+                    Value::Number(n) => n.as_u64(),
+                    Value::String(s) => s.parse::<u64>().ok(),
+                    _ => None,
+                })
+                .map(|total| row_limit.map_or(total, |limit| total.min(limit as u64))),
             Err(_) => None,
         }
     };
@@ -269,6 +285,9 @@ pub async fn export_table_data_core(
                     return Ok(());
                 }
 
+                let Some(active_batch_size) = next_export_batch_size(row_limit, rows_exported, batch_size) else {
+                    break;
+                };
                 let sql = table_page_sql(
                     request,
                     &db_type,
@@ -277,10 +296,10 @@ pub async fn export_table_data_core(
                     use_keyset,
                     &last_pk_values,
                     offset,
-                    batch_size,
+                    active_batch_size,
                 );
 
-                let result = execute_on_pool_with_max_rows(state, &pool_key, &sql, Some(batch_size)).await?;
+                let result = execute_on_pool_with_max_rows(state, &pool_key, &sql, Some(active_batch_size)).await?;
                 let row_count = result.rows.len();
                 if row_count == 0 {
                     break;
@@ -319,7 +338,7 @@ pub async fn export_table_data_core(
                     error_message: None,
                 });
 
-                if row_count < batch_size {
+                if row_count < active_batch_size {
                     break;
                 }
             }
@@ -347,6 +366,9 @@ pub async fn export_table_data_core(
                     return Ok(());
                 }
 
+                let Some(active_batch_size) = next_export_batch_size(row_limit, rows_exported, batch_size) else {
+                    break;
+                };
                 let sql = table_page_sql(
                     request,
                     &db_type,
@@ -355,10 +377,10 @@ pub async fn export_table_data_core(
                     use_keyset,
                     &last_pk_values,
                     offset,
-                    batch_size,
+                    active_batch_size,
                 );
 
-                let result = execute_on_pool_with_max_rows(state, &pool_key, &sql, Some(batch_size)).await?;
+                let result = execute_on_pool_with_max_rows(state, &pool_key, &sql, Some(active_batch_size)).await?;
                 let row_count = result.rows.len();
                 if row_count == 0 {
                     break;
@@ -387,7 +409,7 @@ pub async fn export_table_data_core(
                     error_message: None,
                 });
 
-                if row_count < batch_size {
+                if row_count < active_batch_size {
                     break;
                 }
             }
@@ -426,6 +448,9 @@ pub async fn export_table_data_core(
                     return Ok(());
                 }
 
+                let Some(active_batch_size) = next_export_batch_size(row_limit, rows_exported, batch_size) else {
+                    break;
+                };
                 let sql = table_page_sql(
                     request,
                     &db_type,
@@ -434,9 +459,9 @@ pub async fn export_table_data_core(
                     use_keyset,
                     &last_pk_values,
                     offset,
-                    batch_size,
+                    active_batch_size,
                 );
-                let result = execute_on_pool_with_max_rows(state, &pool_key, &sql, Some(batch_size)).await?;
+                let result = execute_on_pool_with_max_rows(state, &pool_key, &sql, Some(active_batch_size)).await?;
                 let row_count = result.rows.len();
                 if row_count == 0 {
                     break;
@@ -468,7 +493,7 @@ pub async fn export_table_data_core(
                     error_message: None,
                 });
 
-                if row_count < batch_size {
+                if row_count < active_batch_size {
                     break;
                 }
             }
@@ -493,6 +518,9 @@ pub async fn export_table_data_core(
                     return Ok(());
                 }
 
+                let Some(active_batch_size) = next_export_batch_size(row_limit, rows_exported, batch_size) else {
+                    break;
+                };
                 let sql = table_page_sql(
                     request,
                     &db_type,
@@ -501,9 +529,9 @@ pub async fn export_table_data_core(
                     use_keyset,
                     &last_pk_values,
                     offset,
-                    batch_size,
+                    active_batch_size,
                 );
-                let result = execute_on_pool_with_max_rows(state, &pool_key, &sql, Some(batch_size)).await?;
+                let result = execute_on_pool_with_max_rows(state, &pool_key, &sql, Some(active_batch_size)).await?;
                 let row_count = result.rows.len();
                 if row_count == 0 {
                     break;
@@ -536,7 +564,7 @@ pub async fn export_table_data_core(
                     error_message: None,
                 });
 
-                if row_count < batch_size {
+                if row_count < active_batch_size {
                     break;
                 }
             }
@@ -559,6 +587,9 @@ pub async fn export_table_data_core(
                     return Ok(());
                 }
 
+                let Some(active_batch_size) = next_export_batch_size(row_limit, rows_exported, batch_size) else {
+                    break;
+                };
                 let sql = table_page_sql(
                     request,
                     &db_type,
@@ -567,9 +598,9 @@ pub async fn export_table_data_core(
                     use_keyset,
                     &last_pk_values,
                     offset,
-                    batch_size,
+                    active_batch_size,
                 );
-                let result = execute_on_pool_with_max_rows(state, &pool_key, &sql, Some(batch_size)).await?;
+                let result = execute_on_pool_with_max_rows(state, &pool_key, &sql, Some(active_batch_size)).await?;
                 let row_count = result.rows.len();
                 if row_count == 0 {
                     break;
@@ -612,7 +643,7 @@ pub async fn export_table_data_core(
                     error_message: None,
                 });
 
-                if row_count < batch_size {
+                if row_count < active_batch_size {
                     break;
                 }
             }
@@ -704,6 +735,14 @@ mod tests {
         let rows = vec![vec![json!("just"), json!("one")]];
         let out = format_csv_rows(&rows);
         assert_eq!(out, "\"just\",\"one\"");
+    }
+
+    #[test]
+    fn export_batch_size_respects_row_limit_remaining_rows() {
+        assert_eq!(next_export_batch_size(None, 12_000, 10_000), Some(10_000));
+        assert_eq!(next_export_batch_size(Some(15_000), 0, 10_000), Some(10_000));
+        assert_eq!(next_export_batch_size(Some(15_000), 10_000, 10_000), Some(5_000));
+        assert_eq!(next_export_batch_size(Some(15_000), 15_000, 10_000), None);
     }
 
     #[test]

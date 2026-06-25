@@ -447,7 +447,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   snippets: DEFAULT_SQL_SNIPPETS,
   tableColumnTemplateFields: [...DEFAULT_TABLE_COLUMN_TEMPLATE_FIELDS],
   exportBatchSize: 2000,
-  exportRowLimitEnabled: true,
+  exportRowLimitEnabled: false,
   exportRowLimit: 100000,
   queryExportKeysetOptimizationEnabled: true,
   toolbarItems: { ...DEFAULT_TOOLBAR_ITEMS },
