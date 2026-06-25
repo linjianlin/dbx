@@ -60,6 +60,40 @@ func TestCloseMissingQuerySessionReturnsFalse(t *testing.T) {
 	}
 }
 
+func TestMissingTableReadSessionMethodsReturnEmptyOrFalse(t *testing.T) {
+	s := newServer()
+
+	fetchResp, shutdown := s.handleLine(`{"jsonrpc":"2.0","id":9,"method":"fetch_table_read_page","params":{"sessionId":"missing","pageSize":10}}`)
+	if shutdown {
+		t.Fatal("fetch_table_read_page should not shut down the server")
+	}
+	if fetchResp.Error != nil {
+		t.Fatalf("unexpected fetch error: %v", fetchResp.Error)
+	}
+	data, err := json.Marshal(fetchResp.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var page queryPageResult
+	if err := json.Unmarshal(data, &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Columns) != 0 || len(page.Rows) != 0 || page.HasMore || page.SessionID != nil {
+		t.Fatalf("missing table read session should return empty page, got %+v", page)
+	}
+
+	closeResp, shutdown := s.handleLine(`{"jsonrpc":"2.0","id":10,"method":"close_table_read_session","params":{"sessionId":"missing"}}`)
+	if shutdown {
+		t.Fatal("close_table_read_session should not shut down the server")
+	}
+	if closeResp.Error != nil {
+		t.Fatalf("unexpected close error: %v", closeResp.Error)
+	}
+	if closeResp.Result != false {
+		t.Fatalf("expected false result, got %#v", closeResp.Result)
+	}
+}
+
 func TestEmptyResultSlicesMarshalAsArrays(t *testing.T) {
 	data, err := json.Marshal(queryResult{})
 	if err != nil {

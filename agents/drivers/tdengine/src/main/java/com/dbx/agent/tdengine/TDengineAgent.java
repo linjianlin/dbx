@@ -192,6 +192,18 @@ public final class TDengineAgent extends BaseDatabaseAgent {
     }
 
     @Override
+    public QueryPageResult startTableRead(String sql, String schema, QueryPageOptions options) {
+        return JdbcExecutor.INSTANCE.startTableRead(
+            requireConnected(),
+            sql,
+            schema,
+            this::setSchemaSQL,
+            options,
+            this::tdengineResultValue
+        );
+    }
+
+    @Override
     public String setSchemaSQL(String schema) {
         return "USE " + quoteIdentifier(schema);
     }

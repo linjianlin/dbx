@@ -7,6 +7,7 @@ use rust_decimal::Decimal;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -2042,6 +2043,93 @@ pub async fn execute_query_with_max_rows(
 ) -> Result<QueryResult, String> {
     let mut conn = get_conn_with_health_check(pool).await?;
     execute_query_on_conn_with_max_rows(&mut conn, sql, bare, max_rows, dialect).await
+}
+
+pub async fn stream_query_rows(
+    pool: &MySqlPool,
+    sql: &str,
+    bare: bool,
+    max_rows: Option<usize>,
+    dialect: MySqlQueryDialect,
+    cancelled: &AtomicBool,
+    mut on_row: impl FnMut(&[serde_json::Value]) -> Result<(), String>,
+) -> Result<u64, String> {
+    let mut conn = get_conn_with_health_check(pool).await?;
+    let row_limit = max_rows.unwrap_or(usize::MAX);
+
+    if bare || prefers_text_protocol_query(sql, dialect) {
+        stream_query_rows_text(&mut conn, sql, row_limit, cancelled, &mut on_row).await
+    } else {
+        match stream_query_rows_prepared(&mut conn, sql, row_limit, cancelled, &mut on_row).await {
+            Ok(rows) => Ok(rows),
+            Err(err) if mysql_error_should_retry_with_text_protocol(&err) => {
+                stream_query_rows_text(&mut conn, sql, row_limit, cancelled, &mut on_row).await
+            }
+            Err(err) => Err(err),
+        }
+    }
+}
+
+async fn stream_query_rows_text(
+    conn: &mut mysql_async::Conn,
+    sql: &str,
+    row_limit: usize,
+    cancelled: &AtomicBool,
+    on_row: &mut impl FnMut(&[serde_json::Value]) -> Result<(), String>,
+) -> Result<u64, String> {
+    let mut result = conn.query_iter(sql).await.map_err(|e| e.to_string())?;
+    let mut stream = result
+        .stream::<mysql_async::Row>()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Empty result set stream".to_string())?;
+    let mut rows_exported = 0_u64;
+
+    while let Some(row) = stream.next().await {
+        if cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(crate::query::canceled_error());
+        }
+        if rows_exported as usize >= row_limit {
+            break;
+        }
+        let row = row.map_err(|e| e.to_string())?;
+        let values: Vec<serde_json::Value> = (0..row.len()).map(|i| mysql_value_to_json(&row, i)).collect();
+        on_row(&values)?;
+        rows_exported += 1;
+    }
+
+    Ok(rows_exported)
+}
+
+async fn stream_query_rows_prepared(
+    conn: &mut mysql_async::Conn,
+    sql: &str,
+    row_limit: usize,
+    cancelled: &AtomicBool,
+    on_row: &mut impl FnMut(&[serde_json::Value]) -> Result<(), String>,
+) -> Result<u64, String> {
+    let mut result = conn.exec_iter(sql, ()).await.map_err(|e| e.to_string())?;
+    let mut stream = result
+        .stream::<mysql_async::Row>()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Empty result set stream".to_string())?;
+    let mut rows_exported = 0_u64;
+
+    while let Some(row) = stream.next().await {
+        if cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(crate::query::canceled_error());
+        }
+        if rows_exported as usize >= row_limit {
+            break;
+        }
+        let row = row.map_err(|e| e.to_string())?;
+        let values: Vec<serde_json::Value> = (0..row.len()).map(|i| mysql_value_to_json(&row, i)).collect();
+        on_row(&values)?;
+        rows_exported += 1;
+    }
+
+    Ok(rows_exported)
 }
 
 pub async fn kill_query(pool: &MySqlPool, connection_id: u32) -> Result<(), String> {

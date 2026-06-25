@@ -471,6 +471,18 @@ public final class Oracle10gAgent extends BaseDatabaseAgent {
     }
 
     @Override
+    public QueryPageResult startTableRead(String sql, String schema, QueryPageOptions options) {
+        return JdbcExecutor.INSTANCE.startTableRead(
+            requireConnected(),
+            prepareExecutableSql(sql),
+            schema,
+            this::setSchemaSQL,
+            options,
+            this::stringResultValue
+        );
+    }
+
+    @Override
     public void disconnect() {
         uncheckedVoid(() -> {
             if (connection != null) {

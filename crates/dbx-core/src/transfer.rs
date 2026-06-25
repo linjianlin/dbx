@@ -346,6 +346,16 @@ fn postgres_order_by_expression(columns: &[String], db_type: &DatabaseType) -> O
     Some(columns.iter().map(|column| quote_identifier(column, db_type)).collect::<Vec<_>>().join(", "))
 }
 
+fn oracle_rownum_page_sql(col_list: &str, base_sql: String, offset: u64, limit: usize) -> String {
+    if offset == 0 {
+        return format!("SELECT {col_list} FROM ({base_sql}) WHERE ROWNUM <= {limit}");
+    }
+    let end = offset + limit as u64;
+    format!(
+        "SELECT {col_list} FROM (SELECT dbx_inner.*, ROWNUM AS \"__dbx_row_num\" FROM ({base_sql}) dbx_inner WHERE ROWNUM <= {end}) WHERE \"__dbx_row_num\" > {offset}"
+    )
+}
+
 fn postgres_index_column_sql(column: &str) -> String {
     if is_simple_identifier(column) {
         quote_identifier(column, &DatabaseType::Postgres)
@@ -1551,7 +1561,11 @@ pub fn pagination_sql(
     let col_list = columns.iter().map(|c| quote_identifier(c, db_type)).collect::<Vec<_>>().join(", ");
 
     match db_type {
-        DatabaseType::SqlServer | DatabaseType::Oracle | DatabaseType::Dameng => {
+        DatabaseType::Oracle => {
+            let base_sql = format!("SELECT {col_list} FROM {full_table}");
+            oracle_rownum_page_sql(&col_list, base_sql, offset, limit)
+        }
+        DatabaseType::SqlServer | DatabaseType::Dameng => {
             format!(
                 "SELECT {col_list} FROM {full_table} ORDER BY (SELECT NULL) OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY"
             )
@@ -1580,7 +1594,12 @@ pub fn pagination_sql_with_order(
     let order_expression = postgres_order_by_expression(order_by_columns, db_type);
 
     match db_type {
-        DatabaseType::SqlServer | DatabaseType::Oracle | DatabaseType::Dameng => {
+        DatabaseType::Oracle => {
+            let order_by = order_expression.map(|value| format!(" ORDER BY {value}")).unwrap_or_default();
+            let base_sql = format!("SELECT {col_list} FROM {full_table}{order_by}");
+            oracle_rownum_page_sql(&col_list, base_sql, offset, limit)
+        }
+        DatabaseType::SqlServer | DatabaseType::Dameng => {
             let order_by = order_expression.unwrap_or_else(|| "(SELECT NULL)".to_string());
             format!(
                 "SELECT {col_list} FROM {full_table} ORDER BY {order_by} OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY"
@@ -1621,7 +1640,12 @@ pub fn pagination_sql_with_filter_order(
         .or_else(|| postgres_order_by_expression(default_order_columns, db_type));
 
     match db_type {
-        DatabaseType::SqlServer | DatabaseType::Oracle | DatabaseType::Dameng => {
+        DatabaseType::Oracle => {
+            let order_by = order_expression.map(|value| format!(" ORDER BY {value}")).unwrap_or_default();
+            let base_sql = format!("SELECT {col_list} FROM {full_table}{where_clause}{order_by}");
+            oracle_rownum_page_sql(&col_list, base_sql, offset, limit)
+        }
+        DatabaseType::SqlServer | DatabaseType::Dameng => {
             let order_by = order_expression.unwrap_or_else(|| "(SELECT NULL)".to_string());
             format!(
                 "SELECT {col_list} FROM {full_table}{where_clause} ORDER BY {order_by} OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY"
@@ -1667,7 +1691,11 @@ pub fn keyset_pagination_sql(
     let where_clause = keyset_where_clause(primary_keys, last_pk_values, db_type);
 
     match db_type {
-        DatabaseType::SqlServer | DatabaseType::Oracle | DatabaseType::Dameng => {
+        DatabaseType::Oracle => {
+            let base_sql = format!("SELECT {col_list} FROM {full_table}{where_clause} ORDER BY {order}");
+            oracle_rownum_page_sql(&col_list, base_sql, 0, limit)
+        }
+        DatabaseType::SqlServer | DatabaseType::Dameng => {
             format!(
                 "SELECT {col_list} FROM {full_table}{where_clause} ORDER BY {order} OFFSET 0 ROWS FETCH NEXT {limit} ROWS ONLY"
             )
@@ -4046,6 +4074,28 @@ mod tests {
     }
 
     #[test]
+    fn oracle_filtered_pagination_uses_rownum_for_legacy_compatibility() {
+        let sql = pagination_sql_with_filter_order(
+            &[String::from("id"), String::from("status")],
+            "users",
+            "APP",
+            &DatabaseType::Oracle,
+            10_000,
+            2_000,
+            Some("WHERE status = 'active'"),
+            Some("\"id\" DESC"),
+            &[String::from("id")],
+        );
+
+        assert_eq!(
+            sql,
+            "SELECT \"id\", \"status\" FROM (SELECT dbx_inner.*, ROWNUM AS \"__dbx_row_num\" FROM (SELECT \"id\", \"status\" FROM \"APP\".\"users\" WHERE (status = 'active') ORDER BY \"id\" DESC) dbx_inner WHERE ROWNUM <= 12000) WHERE \"__dbx_row_num\" > 10000"
+        );
+        assert!(!sql.contains("OFFSET"));
+        assert!(!sql.contains("FETCH NEXT"));
+    }
+
+    #[test]
     fn filtered_count_preserves_where() {
         let sql = count_sql_with_where("users", "public", &DatabaseType::SapHana, Some("WHERE status = 'active'"));
 
@@ -4087,6 +4137,26 @@ mod tests {
             "SELECT \"id\", \"name\" FROM \"SYSDBA\".\"users\" WHERE \"id\" > 25 ORDER BY \"id\" ASC OFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY"
         );
         assert!(!sql.contains(" LIMIT "));
+    }
+
+    #[test]
+    fn oracle_keyset_pagination_uses_rownum_for_legacy_compatibility() {
+        let sql = keyset_pagination_sql(
+            &[String::from("id"), String::from("name")],
+            "users",
+            "APP",
+            &DatabaseType::Oracle,
+            &[String::from("id")],
+            &[json!(25)],
+            100,
+        );
+
+        assert_eq!(
+            sql,
+            "SELECT \"id\", \"name\" FROM (SELECT \"id\", \"name\" FROM \"APP\".\"users\" WHERE \"id\" > 25 ORDER BY \"id\" ASC) WHERE ROWNUM <= 100"
+        );
+        assert!(!sql.contains("OFFSET"));
+        assert!(!sql.contains("FETCH NEXT"));
     }
 
     #[test]

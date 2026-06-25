@@ -102,6 +102,29 @@ public interface DatabaseAgent {
         return JdbcExecutor.INSTANCE.closeQuerySession(sessionId);
     }
 
+    default QueryPageResult startTableRead(String sql, String schema, QueryPageOptions options) {
+        Connection conn = getConnection();
+        if (conn == null) {
+            throw new IllegalStateException("Not connected");
+        }
+        return JdbcExecutor.INSTANCE.startTableRead(
+            conn,
+            sql,
+            schema,
+            this::setSchemaSQL,
+            options,
+            JdbcExecutor.INSTANCE::defaultResultValue
+        );
+    }
+
+    default QueryPageResult fetchTableReadPage(String sessionId, int pageSize) {
+        return JdbcExecutor.INSTANCE.fetchTableReadPage(sessionId, pageSize);
+    }
+
+    default boolean closeTableReadSession(String sessionId) {
+        return JdbcExecutor.INSTANCE.closeTableReadSession(sessionId);
+    }
+
     /**
      * Get DM execution plan. Supports two modes:
      *   mode="explain" (default) — direct plan, no execution

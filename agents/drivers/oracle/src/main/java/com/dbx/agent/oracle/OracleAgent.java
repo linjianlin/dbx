@@ -576,6 +576,18 @@ public class OracleAgent extends BaseDatabaseAgent {
     }
 
     @Override
+    public QueryPageResult startTableRead(String sql, String schema, QueryPageOptions options) {
+        return JdbcExecutor.INSTANCE.startTableRead(
+            requireConnected(),
+            prepareExecutableSql(sql),
+            schema,
+            this::setSchemaSQL,
+            options,
+            OracleAgent::stringResultValue
+        );
+    }
+
+    @Override
     public void disconnect() {
         uncheckedVoid(() -> {
             if (connection != null) {
