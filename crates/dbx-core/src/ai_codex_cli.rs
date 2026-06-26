@@ -29,13 +29,42 @@ async fn resolve_codex_command(config: &AiConfig) -> CodexCommandSpec {
     let configured = codex_program(config);
     if is_path_like_program(&configured) {
         let expanded = expand_tilde(&configured);
-        return CodexCommandSpec { program: direct_program_path(&expanded).unwrap_or(expanded), args: Vec::new() };
+        return codex_command_for_program(direct_program_path(&expanded).unwrap_or(expanded));
     }
     if let Some(path) = resolve_program_path(&configured).await {
-        CodexCommandSpec { program: path, args: Vec::new() }
+        codex_command_for_program(path)
     } else {
         CodexCommandSpec { program: configured, args: Vec::new() }
     }
+}
+
+fn codex_command_for_program(program: String) -> CodexCommandSpec {
+    #[cfg(windows)]
+    if let Some(command) = windows_npm_codex_shim_command(&program) {
+        return command;
+    }
+
+    CodexCommandSpec { program, args: Vec::new() }
+}
+
+#[cfg(windows)]
+fn windows_npm_codex_shim_command(program: &str) -> Option<CodexCommandSpec> {
+    let path = Path::new(program);
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    if extension != "cmd" && extension != "bat" {
+        return None;
+    }
+
+    let parent = path.parent()?;
+    let codex_js = parent.join("node_modules").join("@openai").join("codex").join("bin").join("codex.js");
+    if !codex_js.is_file() {
+        return None;
+    }
+
+    let bundled_node = parent.join("node.exe");
+    let node = if bundled_node.is_file() { bundled_node.to_string_lossy().to_string() } else { "node".to_string() };
+
+    Some(CodexCommandSpec { program: node, args: vec![codex_js.to_string_lossy().to_string()] })
 }
 
 fn codex_process_env(config: &AiConfig, command: &CodexCommandSpec) -> Result<Vec<(String, String)>, String> {
@@ -74,10 +103,9 @@ fn direct_program_path(program: &str) -> Option<String> {
     let path = Path::new(program);
     if path.is_absolute() && path.is_file() {
         #[cfg(windows)]
-        {
-            return windows_launchable_program_path(path);
-        }
-        Some(path.to_string_lossy().to_string())
+        return windows_launchable_program_path(path);
+        #[cfg(not(windows))]
+        return Some(path.to_string_lossy().to_string());
     } else {
         None
     }
@@ -392,6 +420,7 @@ pub async fn list_codex_models(config: &AiConfig) -> Result<Vec<AiModelInfo>, St
     validate_codex_program(config)?;
     let command = resolve_codex_command(config).await;
     let output = cli_command(&command.program)
+        .args(command.args.iter().map(String::as_str))
         .args(["debug", "models"])
         .envs(codex_process_env(config, &command)?.iter().map(|(key, value)| (key.as_str(), value.as_str())))
         .output()
@@ -444,6 +473,7 @@ pub async fn test_codex_connection(config: &AiConfig) -> Result<AiTestConnection
     validate_codex_program(config)?;
     let codex_command = resolve_codex_command(config).await;
     let mut command = cli_command(&codex_command.program);
+    command.args(codex_command.args.iter().map(String::as_str));
     command.args(["login", "status"]);
     command.envs(codex_process_env(config, &codex_command)?.iter().map(|(key, value)| (key.as_str(), value.as_str())));
 
@@ -500,6 +530,7 @@ pub async fn run_codex_agent(
     let mut command = build_codex_exec_command(config, prompt, &options);
     let resolved_command = resolve_codex_command(config).await;
     command.program = resolved_command.program;
+    command.args.splice(0..0, resolved_command.args);
     let env = codex_process_env(config, &command)?;
     run_cli_jsonl_agent(
         CliAgentProcessSpec {
@@ -526,7 +557,9 @@ mod tests {
     #[cfg(not(windows))]
     use super::{codex_process_env, common_executable_dirs, merged_path_with_dir};
     #[cfg(windows)]
-    use super::{direct_program_path, first_windows_program_path, program_path_candidates};
+    use super::{
+        direct_program_path, first_windows_program_path, program_path_candidates, windows_npm_codex_shim_command,
+    };
     use crate::agent_events::AgentEvent;
     use crate::ai::{AiApiStyle, AiAuthMethod, AiConfig, AiProvider, AiReasoningLevel};
     use crate::ai_cli_agent::{model_infos, CliAgentCommandSpec};
@@ -677,6 +710,29 @@ mod tests {
         assert!(resolved.is_none());
         let _ = std::fs::remove_file(extensionless);
         let _ = std::fs::remove_dir(dir);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_npm_codex_cmd_shim_uses_node_directly() {
+        let dir = std::env::temp_dir().join(format!("dbx-codex-npm-shim-test-{}", std::process::id()));
+        let bin_dir = dir.join("node_modules").join("@openai").join("codex").join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let cmd = dir.join("codex.cmd");
+        let node = dir.join("node.exe");
+        let codex_js = bin_dir.join("codex.js");
+        std::fs::write(&cmd, "@echo off\nnode codex.js %*\n").unwrap();
+        std::fs::write(&node, "").unwrap();
+        std::fs::write(&codex_js, "#!/usr/bin/env node\n").unwrap();
+
+        let command = windows_npm_codex_shim_command(cmd.to_string_lossy().as_ref()).unwrap();
+
+        assert_eq!(command.program, node.to_string_lossy().as_ref());
+        assert_eq!(command.args, vec![codex_js.to_string_lossy().to_string()]);
+        let _ = std::fs::remove_file(cmd);
+        let _ = std::fs::remove_file(node);
+        let _ = std::fs::remove_file(codex_js);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
